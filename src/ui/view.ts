@@ -56,6 +56,7 @@ export class CalendarView extends ItemView {
     inSidebar: boolean;
     fullCalendarView: Calendar | null = null;
     callback: UpdateViewCallback | null = null;
+    selectedEventIds: Set<string> = new Set();
 
     constructor(
         leaf: WorkspaceLeaf,
@@ -123,20 +124,41 @@ export class CalendarView extends ItemView {
             this.fullCalendarView.destroy();
             this.fullCalendarView = null;
         }
+        const clearSelection = () => {
+            this.selectedEventIds.clear();
+            calendarEl
+                .querySelectorAll(".fc-event.ofc-selected")
+                .forEach((el) => el.classList.remove("ofc-selected"));
+        };
+
         this.fullCalendarView = renderCalendar(calendarEl, sources, {
             forceNarrow: this.inSidebar,
+            selectedEventIds: this.selectedEventIds,
             eventClick: async (info) => {
                 try {
+                    if (info.jsEvent.getModifierState("Shift")) {
+                        const id = info.event.id;
+                        if (this.selectedEventIds.has(id)) {
+                            this.selectedEventIds.delete(id);
+                            info.el.classList.remove("ofc-selected");
+                        } else {
+                            this.selectedEventIds.add(id);
+                            info.el.classList.add("ofc-selected");
+                        }
+                        return;
+                    }
                     if (
                         info.jsEvent.getModifierState("Control") ||
                         info.jsEvent.getModifierState("Meta")
                     ) {
+                        clearSelection();
                         await openFileForEvent(
                             this.plugin.cache,
                             this.app,
                             info.event.id
                         );
                     } else {
+                        clearSelection();
                         launchEditModal(this.plugin, info.event.id);
                     }
                 } catch (e) {
@@ -183,7 +205,47 @@ export class CalendarView extends ItemView {
                         oldEvent.id,
                         fromEventApi(newEvent)
                     );
-                    return !!didModify;
+                    if (!didModify) return false;
+
+                    // Batch move: si el evento arrastrado forma parte de una
+                    // selección múltiple, aplicar el mismo delta a los demás.
+                    const startDelta =
+                        (newEvent.start?.getTime() ?? 0) -
+                        (oldEvent.start?.getTime() ?? 0);
+                    if (
+                        startDelta !== 0 &&
+                        this.selectedEventIds.has(oldEvent.id) &&
+                        this.selectedEventIds.size > 1
+                    ) {
+                        const otherIds = [...this.selectedEventIds].filter(
+                            (id) => id !== oldEvent.id
+                        );
+                        for (const id of otherIds) {
+                            const ev = this.fullCalendarView?.getEventById(id);
+                            if (!ev || !ev.start) continue;
+                            const newStart = new Date(
+                                ev.start.getTime() + startDelta
+                            );
+                            const newEnd = ev.end
+                                ? new Date(ev.end.getTime() + startDelta)
+                                : null;
+                            ev.setDates(newStart, newEnd, {
+                                allDay: ev.allDay,
+                            });
+                            try {
+                                await this.plugin.cache.updateEventWithId(
+                                    id,
+                                    fromEventApi(ev)
+                                );
+                            } catch (e: any) {
+                                console.error(e);
+                                new Notice(
+                                    `No se pudo mover ${ev.title}: ${e.message}`
+                                );
+                            }
+                        }
+                    }
+                    return true;
                 } catch (e: any) {
                     console.error(e);
                     new Notice(e.message);
@@ -218,6 +280,47 @@ export class CalendarView extends ItemView {
                 }
                 const event = this.plugin.cache.getEventById(e.id);
                 if (!event) {
+                    return;
+                }
+
+                if (
+                    this.selectedEventIds.has(e.id) &&
+                    this.selectedEventIds.size > 1
+                ) {
+                    const count = this.selectedEventIds.size;
+                    menu.addItem((item) =>
+                        item
+                            .setTitle(`Delete ${count} events`)
+                            .onClick(async () => {
+                                if (!this.plugin.cache) return;
+                                if (
+                                    !window.confirm(
+                                        `¿Eliminar ${count} eventos seleccionados?`
+                                    )
+                                ) {
+                                    return;
+                                }
+                                const ids = [...this.selectedEventIds];
+                                clearSelection();
+                                for (const id of ids) {
+                                    try {
+                                        await this.plugin.cache.deleteEvent(
+                                            id
+                                        );
+                                    } catch (err: any) {
+                                        console.error(err);
+                                        new Notice(err.message);
+                                    }
+                                }
+                                new Notice(`Deleted ${ids.length} events.`);
+                            })
+                    );
+                    menu.addItem((item) =>
+                        item
+                            .setTitle("Clear selection")
+                            .onClick(() => clearSelection())
+                    );
+                    menu.showAtMouseEvent(mouseEvent);
                     return;
                 }
 

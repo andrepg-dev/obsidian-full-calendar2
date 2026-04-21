@@ -172,7 +172,9 @@ export default class EventCache {
         for (const [calId, calendar] of this.calendars.entries()) {
             const events = eventsByCalendar.get(calId) || [];
             result.push({
-                editable: calendar instanceof EditableCalendar,
+                editable:
+                    calendar instanceof EditableCalendar ||
+                    calendar instanceof WritableRemoteCalendar,
                 events: events.map(({ event, id }) => ({ event, id })), // make sure not to leak location data past the cache.
                 color: calendar.color,
                 id: calId,
@@ -660,7 +662,7 @@ export default class EventCache {
                     });
                     this.updateCalendar({
                         id: calendar.id,
-                        editable: false,
+                        editable: calendar instanceof WritableRemoteCalendar,
                         color: calendar.color,
                         events: newEvents,
                     });

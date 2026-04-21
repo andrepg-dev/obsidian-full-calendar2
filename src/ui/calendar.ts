@@ -54,6 +54,7 @@ interface ExtraRenderProps {
     ) => Promise<void>;
     toggleTask?: (event: EventApi, isComplete: boolean) => Promise<boolean>;
     forceNarrow?: boolean;
+    selectedEventIds?: Set<string>;
 }
 
 export function renderCalendar(
@@ -70,6 +71,7 @@ export function renderCalendar(
         eventMouseEnter,
         openContextMenuForEvent,
         toggleTask,
+        selectedEventIds,
     } = settings || {};
     const modifyEventCallback =
         modifyEvent &&
@@ -185,6 +187,9 @@ export function renderCalendar(
         eventMouseEnter,
 
         eventDidMount: ({ event, el, textColor }) => {
+            if (selectedEventIds?.has(event.id)) {
+                el.classList.add("ofc-selected");
+            }
             el.addEventListener("contextmenu", (e) => {
                 e.preventDefault();
                 openContextMenuForEvent && openContextMenuForEvent(event, e);

@@ -680,3 +680,12 @@
 	background: var(--ofc-d-danger);
 	color: #fff;
 }
+
+/* Multi-selection: shift+click marca eventos con este outline. */
+.fc .ofc-selected.fc-event,
+.fc .fc-event.ofc-selected {
+	outline: 2px solid var(--ofc-accent);
+	outline-offset: 1px;
+	box-shadow: 0 0 0 2px var(--ofc-accent-bg-strong);
+	z-index: 5;
+}
