@@ -48,6 +48,7 @@ interface ExtraRenderProps {
     firstDay?: number;
     initialView?: { desktop: string; mobile: string };
     timeFormat24h?: boolean;
+    slotMinutes?: number;
     openContextMenuForEvent?: (
         event: EventApi,
         mouseEvent: MouseEvent
@@ -156,6 +157,21 @@ export function renderCalendar(
             },
         },
         firstDay: settings?.firstDay,
+        ...(settings?.slotMinutes && settings.slotMinutes > 0
+            ? (() => {
+                  const m = Math.max(
+                      1,
+                      Math.min(60, Math.floor(settings.slotMinutes as number))
+                  );
+                  const hh = String(Math.floor(m / 60)).padStart(2, "0");
+                  const mm = String(m % 60).padStart(2, "0");
+                  const duration = `${hh}:${mm}:00`;
+                  return {
+                      slotDuration: duration,
+                      snapDuration: duration,
+                  };
+              })()
+            : {}),
         ...(settings?.timeFormat24h && {
             eventTimeFormat: {
                 hour: "numeric",

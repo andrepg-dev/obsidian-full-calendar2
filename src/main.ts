@@ -74,6 +74,10 @@ export default class FullCalendarPlugin extends Plugin {
                           clientId: this.settings.googleClientId,
                           clientSecret: this.settings.googleClientSecret,
                       }),
+                      getReminderOverride: () => ({
+                          enabled: this.settings.googleOverrideReminder,
+                          minutes: this.settings.googleReminderMinutes,
+                      }),
                       persistTokens: (payload) =>
                           this.persistGoogleTokens(
                               info.accountEmail,

@@ -435,16 +435,40 @@ function ensureRRulePrefix(rrule: string): string[] {
         );
 }
 
+export type GoogleReminderOverride = {
+    /** When true, the plugin sends a custom popup reminder. When false, Google's
+     *  calendar-level default reminders are left untouched. */
+    enabled: boolean;
+    minutes: number;
+};
+
+function buildReminders(
+    override?: GoogleReminderOverride
+): Record<string, unknown> | undefined {
+    if (!override || !override.enabled) return undefined;
+    const minutes = Math.max(
+        0,
+        Math.min(40320, Math.floor(override.minutes))
+    );
+    return {
+        useDefault: false,
+        overrides: [{ method: "popup", minutes }],
+    };
+}
+
 /**
  * Convert an OFCEvent into a Google event request body suitable for POST/PATCH.
  */
 export function ofcToGoogle(
     event: OFCEvent,
-    timeZone: string
+    timeZone: string,
+    reminderOverride?: GoogleReminderOverride
 ): Record<string, unknown> {
     const body: Record<string, unknown> = {
         summary: event.title,
     };
+    const reminders = buildReminders(reminderOverride);
+    if (reminders) body.reminders = reminders;
 
     if (event.type === "single") {
         if (event.allDay) {

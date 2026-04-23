@@ -11,6 +11,7 @@ import {
     createGoogleEvent,
     deleteGoogleEvent,
     foldRecurrenceExceptions,
+    GoogleReminderOverride,
     googleToOFC,
     listEvents,
     ofcToGoogle,
@@ -42,6 +43,9 @@ export type GoogleCalendarConfig = {
     /** Lazy getter — re-read from plugin settings each call so the user
      *  can update the credentials without restarting Obsidian. */
     getOAuthClient: () => GoogleOAuthClient;
+    /** Lazy getter for the reminder override preference; re-read on each
+     *  create/update so settings changes take effect immediately. */
+    getReminderOverride: () => GoogleReminderOverride;
     persistTokens: (payload: GoogleTokenPersistPayload) => void;
 };
 
@@ -55,6 +59,7 @@ export default class GoogleCalendar extends WritableRemoteCalendar {
     private expiresAt: number | undefined;
 
     private getOAuthClient: () => GoogleOAuthClient;
+    private getReminderOverride: () => GoogleReminderOverride;
     private persistTokens: (payload: GoogleTokenPersistPayload) => void;
 
     private events: OFCEvent[] = [];
@@ -69,6 +74,7 @@ export default class GoogleCalendar extends WritableRemoteCalendar {
         this.accessToken = config.initialTokens.accessToken;
         this.expiresAt = config.initialTokens.expiresAt;
         this.getOAuthClient = config.getOAuthClient;
+        this.getReminderOverride = config.getReminderOverride;
         this.persistTokens = config.persistTokens;
     }
 
@@ -137,7 +143,7 @@ export default class GoogleCalendar extends WritableRemoteCalendar {
     async createRemoteEvent(event: OFCEvent): Promise<string> {
         const token = await this.getAccessToken();
         const tz = DateTime.local().zoneName;
-        const body = ofcToGoogle(event, tz);
+        const body = ofcToGoogle(event, tz, this.getReminderOverride());
         const created = await createGoogleEvent(token, this.calendarId, body);
         const ofc = googleToOFC(created);
         if (ofc) {
@@ -149,7 +155,7 @@ export default class GoogleCalendar extends WritableRemoteCalendar {
     async updateRemoteEvent(remoteId: string, event: OFCEvent): Promise<void> {
         const token = await this.getAccessToken();
         const tz = DateTime.local().zoneName;
-        const body = ofcToGoogle(event, tz);
+        const body = ofcToGoogle(event, tz, this.getReminderOverride());
         const updated = await patchGoogleEvent(
             token,
             this.calendarId,

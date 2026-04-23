@@ -26,9 +26,12 @@ export interface FullCalendarSettings {
         mobile: string;
     };
     timeFormat24h: boolean;
+    slotMinutes: number;
     clickToCreateEventFromMonthView: boolean;
     googleClientId: string;
     googleClientSecret: string;
+    googleOverrideReminder: boolean;
+    googleReminderMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: FullCalendarSettings = {
@@ -40,9 +43,12 @@ export const DEFAULT_SETTINGS: FullCalendarSettings = {
         mobile: "timeGrid3Days",
     },
     timeFormat24h: false,
+    slotMinutes: 30,
     clickToCreateEventFromMonthView: true,
     googleClientId: "",
     googleClientSecret: "",
+    googleOverrideReminder: true,
+    googleReminderMinutes: 5,
 };
 
 const WEEKDAYS = [
@@ -243,6 +249,35 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
+            .setName("Time slot granularity")
+            .setDesc(
+                "Controls both the height of the time rows and the snap interval when dragging/resizing events."
+            )
+            .addDropdown((dropdown) => {
+                const options: Record<string, string> = {
+                    "5": "5 minutes",
+                    "10": "10 minutes",
+                    "15": "15 minutes",
+                    "20": "20 minutes",
+                    "30": "30 minutes",
+                    "60": "1 hour",
+                };
+                Object.entries(options).forEach(([value, display]) => {
+                    dropdown.addOption(value, display);
+                });
+                dropdown.setValue(
+                    String(this.plugin.settings.slotMinutes ?? 30)
+                );
+                dropdown.onChange(async (value) => {
+                    const parsed = Number.parseInt(value, 10);
+                    this.plugin.settings.slotMinutes = Number.isFinite(parsed)
+                        ? parsed
+                        : 30;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(containerEl)
             .setName("Click on a day in month view to create event")
             .setDesc("Switch off to open day view on click instead.")
             .addToggle((toggle) => {
@@ -366,6 +401,41 @@ export class FullCalendarSettingTab extends PluginSettingTab {
                         await this.plugin.saveData(this.plugin.settings);
                     });
                 t.inputEl.type = "password";
+            });
+
+        new Setting(containerEl)
+            .setName("Override default reminder")
+            .setDesc(
+                "When enabled, events created from this plugin ignore the Google Calendar default reminder and use the custom value below instead."
+            )
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.googleOverrideReminder);
+                toggle.onChange(async (val) => {
+                    this.plugin.settings.googleOverrideReminder = val;
+                    await this.plugin.saveData(this.plugin.settings);
+                });
+            });
+
+        new Setting(containerEl)
+            .setName("Reminder minutes before event")
+            .setDesc(
+                "How many minutes before the event a popup notification should fire. Only applies to events created or updated from this plugin; existing events in Google are not modified."
+            )
+            .addText((t) => {
+                t.setPlaceholder("5")
+                    .setValue(
+                        String(this.plugin.settings.googleReminderMinutes)
+                    )
+                    .onChange(async (value) => {
+                        const parsed = Number.parseInt(value, 10);
+                        if (Number.isFinite(parsed) && parsed >= 0) {
+                            this.plugin.settings.googleReminderMinutes = parsed;
+                            await this.plugin.saveData(this.plugin.settings);
+                        }
+                    });
+                t.inputEl.type = "number";
+                t.inputEl.min = "0";
+                t.inputEl.max = "40320";
             });
     }
 }
