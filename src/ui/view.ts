@@ -274,6 +274,7 @@ export class CalendarView extends ItemView {
             initialView: this.plugin.settings.initialView,
             timeFormat24h: this.plugin.settings.timeFormat24h,
             slotMinutes: this.plugin.settings.slotMinutes,
+            snapMinutes: this.plugin.settings.snapMinutes,
             openContextMenuForEvent: async (e, mouseEvent) => {
                 const menu = new Menu();
                 if (!this.plugin.cache) {

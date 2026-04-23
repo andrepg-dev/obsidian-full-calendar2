@@ -49,6 +49,7 @@ interface ExtraRenderProps {
     initialView?: { desktop: string; mobile: string };
     timeFormat24h?: boolean;
     slotMinutes?: number;
+    snapMinutes?: number;
     openContextMenuForEvent?: (
         event: EventApi,
         mouseEvent: MouseEvent
@@ -157,21 +158,24 @@ export function renderCalendar(
             },
         },
         firstDay: settings?.firstDay,
-        ...(settings?.slotMinutes && settings.slotMinutes > 0
-            ? (() => {
-                  const m = Math.max(
-                      1,
-                      Math.min(60, Math.floor(settings.slotMinutes as number))
-                  );
-                  const hh = String(Math.floor(m / 60)).padStart(2, "0");
-                  const mm = String(m % 60).padStart(2, "0");
-                  const duration = `${hh}:${mm}:00`;
-                  return {
-                      slotDuration: duration,
-                      snapDuration: duration,
-                  };
-              })()
-            : {}),
+        ...(() => {
+            const toDuration = (raw: number | undefined) => {
+                if (!raw || raw <= 0) return undefined;
+                const m = Math.max(1, Math.min(60, Math.floor(raw)));
+                const hh = String(Math.floor(m / 60)).padStart(2, "0");
+                const mm = String(m % 60).padStart(2, "0");
+                return `${hh}:${mm}:00`;
+            };
+            const slot = toDuration(settings?.slotMinutes);
+            // Fall back to slotDuration if snap isn't configured so that
+            // existing setups keep their previous behavior.
+            const snap =
+                toDuration(settings?.snapMinutes) ?? slot;
+            const out: Record<string, string> = {};
+            if (slot) out.slotDuration = slot;
+            if (snap) out.snapDuration = snap;
+            return out;
+        })(),
         ...(settings?.timeFormat24h && {
             eventTimeFormat: {
                 hour: "numeric",

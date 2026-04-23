@@ -27,6 +27,7 @@ export interface FullCalendarSettings {
     };
     timeFormat24h: boolean;
     slotMinutes: number;
+    snapMinutes: number;
     clickToCreateEventFromMonthView: boolean;
     googleClientId: string;
     googleClientSecret: string;
@@ -44,6 +45,7 @@ export const DEFAULT_SETTINGS: FullCalendarSettings = {
     },
     timeFormat24h: false,
     slotMinutes: 30,
+    snapMinutes: 15,
     clickToCreateEventFromMonthView: true,
     googleClientId: "",
     googleClientSecret: "",
@@ -249,9 +251,9 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName("Time slot granularity")
+            .setName("Row height (visual slot)")
             .setDesc(
-                "Controls both the height of the time rows and the snap interval when dragging/resizing events."
+                "Controls how tall each time row is in week/day views. Use larger values (e.g. 30 or 60) to keep the calendar compact."
             )
             .addDropdown((dropdown) => {
                 const options: Record<string, string> = {
@@ -273,6 +275,36 @@ export class FullCalendarSettingTab extends PluginSettingTab {
                     this.plugin.settings.slotMinutes = Number.isFinite(parsed)
                         ? parsed
                         : 30;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(containerEl)
+            .setName("Snap interval (drag & resize)")
+            .setDesc(
+                "Minimum increment when dragging or resizing events. Can be finer than the row height — e.g. 30-minute rows with 15-minute snap."
+            )
+            .addDropdown((dropdown) => {
+                const options: Record<string, string> = {
+                    "1": "1 minute",
+                    "5": "5 minutes",
+                    "10": "10 minutes",
+                    "15": "15 minutes",
+                    "20": "20 minutes",
+                    "30": "30 minutes",
+                    "60": "1 hour",
+                };
+                Object.entries(options).forEach(([value, display]) => {
+                    dropdown.addOption(value, display);
+                });
+                dropdown.setValue(
+                    String(this.plugin.settings.snapMinutes ?? 15)
+                );
+                dropdown.onChange(async (value) => {
+                    const parsed = Number.parseInt(value, 10);
+                    this.plugin.settings.snapMinutes = Number.isFinite(parsed)
+                        ? parsed
+                        : 15;
                     await this.plugin.saveSettings();
                 });
             });
