@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarInfo, OFCEvent } from "../../types";
+import { EVENT_COLOR_PALETTE } from "../calendar";
 
 function makeChangeListener<T>(
     setState: React.Dispatch<React.SetStateAction<T>>,
@@ -64,17 +65,58 @@ interface EditEventProps {
     cancel?: () => void;
 }
 
-function computeDuration(start: string, end: string): string {
-    if (!start || !end) return "—";
+function computeDurationMins(start: string, end: string): number | null {
+    if (!start || !end) return null;
     const [sh, sm] = start.split(":").map(Number);
     const [eh, em] = end.split(":").map(Number);
-    let mins = eh * 60 + em - (sh * 60 + sm);
-    if (Number.isNaN(mins) || mins <= 0) return "—";
+    const mins = eh * 60 + em - (sh * 60 + sm);
+    if (Number.isNaN(mins) || mins <= 0) return null;
+    return mins;
+}
+
+function formatDuration(mins: number | null): string {
+    if (mins === null) return "";
     const h = Math.floor(mins / 60);
     const m = mins % 60;
     if (h && m) return `${h}h ${m}m`;
     if (h) return `${h}h`;
     return `${m}m`;
+}
+
+function parseDuration(input: string): number | null {
+    const s = input.trim().toLowerCase();
+    if (!s) return null;
+    // "1:30" => h:m
+    const colon = s.match(/^(\d+):(\d{1,2})$/);
+    if (colon) {
+        const mins = parseInt(colon[1]) * 60 + parseInt(colon[2]);
+        return mins > 0 ? mins : null;
+    }
+    // "1h 30m", "1h", "30m", "1.5h"
+    const hm = s.match(/^(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+)\s*m)?$/);
+    if (hm && (hm[1] || hm[2])) {
+        const mins =
+            Math.round((parseFloat(hm[1] || "0") || 0) * 60) +
+            (parseInt(hm[2] || "0") || 0);
+        return mins > 0 ? mins : null;
+    }
+    // bare number => minutes
+    const num = s.match(/^(\d+(?:\.\d+)?)$/);
+    if (num) {
+        const mins = Math.round(parseFloat(num[1]));
+        return mins > 0 ? mins : null;
+    }
+    return null;
+}
+
+function addMinutesToTime(start: string, mins: number): string {
+    const [sh, sm] = start.split(":").map(Number);
+    if (Number.isNaN(sh) || Number.isNaN(sm)) return "";
+    let total = sh * 60 + sm + mins;
+    total = ((total % 1440) + 1440) % 1440;
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 export const EditEvent = ({
@@ -139,22 +181,42 @@ export const EditEvent = ({
             initialEvent.completed !== undefined &&
             initialEvent.completed !== null
     );
+    const [color, setColor] = useState<string | undefined>(
+        initialEvent?.color
+    );
 
     const titleRef = useRef<HTMLInputElement>(null);
     useEffect(() => {
         titleRef.current?.focus();
     }, []);
 
-    const duration = useMemo(
-        () => computeDuration(startTime, endTime),
+    const computedMins = useMemo(
+        () => computeDurationMins(startTime, endTime),
         [startTime, endTime]
     );
+    const [durationDraft, setDurationDraft] = useState<string | null>(null);
+    const durationValue =
+        durationDraft !== null ? durationDraft : formatDuration(computedMins);
+    const durationInvalid =
+        durationDraft !== null &&
+        durationDraft.trim() !== "" &&
+        parseDuration(durationDraft) === null;
+
+    const commitDuration = () => {
+        if (durationDraft === null) return;
+        const mins = parseDuration(durationDraft);
+        if (mins !== null && startTime) {
+            setEndTime(addMinutesToTime(startTime, mins));
+        }
+        setDurationDraft(null);
+    };
 
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         await submit(
             {
                 ...{ title },
+                ...(color ? { color } : {}),
                 ...(allDay
                     ? { allDay: true }
                     : { allDay: false, startTime: startTime || "", endTime }),
@@ -186,6 +248,12 @@ export const EditEvent = ({
 
     const onKey = (e: React.KeyboardEvent<HTMLFormElement>) => {
         if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            (e.currentTarget as HTMLFormElement).requestSubmit();
+        } else if (
+            e.key === "Enter" &&
+            (e.target as HTMLElement).classList?.contains("ofc-dialog-swatch")
+        ) {
             e.preventDefault();
             (e.currentTarget as HTMLFormElement).requestSubmit();
         } else if (e.key === "Escape" && cancel) {
@@ -240,6 +308,40 @@ export const EditEvent = ({
                         onChange={makeChangeListener(setTitle, (x) => x)}
                     />
                 </label>
+
+                <div className="ofc-field">
+                    <span className="ofc-field-label">COLOR</span>
+                    <div className="ofc-dialog-color-row">
+                        {EVENT_COLOR_PALETTE.map((hex) => {
+                            const isSelected =
+                                !!color &&
+                                color.toLowerCase() === hex.toLowerCase();
+                            return (
+                                <button
+                                    key={hex}
+                                    type="button"
+                                    className={
+                                        "ofc-dialog-swatch" +
+                                        (isSelected ? " is-selected" : "")
+                                    }
+                                    style={{ background: hex }}
+                                    aria-label={hex}
+                                    onClick={() => setColor(hex)}
+                                />
+                            );
+                        })}
+                        <button
+                            type="button"
+                            className={
+                                "ofc-dialog-swatch ofc-dialog-swatch-default" +
+                                (!color ? " is-selected" : "")
+                            }
+                            aria-label="Default color"
+                            title="Default (calendar color)"
+                            onClick={() => setColor(undefined)}
+                        />
+                    </div>
+                </div>
 
                 <div className="ofc-grid-2">
                     <label className="ofc-field">
@@ -307,12 +409,30 @@ export const EditEvent = ({
                                 )}
                             />
                         </label>
-                        <div className="ofc-field">
+                        <label className="ofc-field">
                             <span className="ofc-field-label">DURATION</span>
-                            <div className="ofc-input ofc-input-mono ofc-input-readonly">
-                                {duration}
-                            </div>
-                        </div>
+                            <input
+                                type="text"
+                                className={
+                                    "ofc-input ofc-input-mono" +
+                                    (durationInvalid ? " is-invalid" : "")
+                                }
+                                value={durationValue}
+                                placeholder="1h 30m"
+                                disabled={!startTime}
+                                onChange={(e) =>
+                                    setDurationDraft(e.target.value)
+                                }
+                                onBlur={commitDuration}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        commitDuration();
+                                        e.currentTarget.form?.requestSubmit();
+                                    }
+                                }}
+                            />
+                        </label>
                     </div>
                 )}
 
