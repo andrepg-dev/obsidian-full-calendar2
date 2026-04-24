@@ -59,6 +59,88 @@ interface ExtraRenderProps {
     selectedEventIds?: Set<string>;
 }
 
+// Google Calendar event palette — mirrors the 11 swatches in the Google UI.
+export const EVENT_COLOR_PALETTE: string[] = [
+    "#D50000", // Tomato
+    "#E67C73", // Flamingo
+    "#F4511E", // Tangerine
+    "#F6BF26", // Banana
+    "#33B679", // Sage
+    "#0B8043", // Basil
+    "#039BE5", // Peacock
+    "#3F51B5", // Blueberry
+    "#7986CB", // Lavender
+    "#8E24AA", // Grape
+    "#616161", // Graphite
+];
+
+export function openColorPalette(opts: {
+    anchor: HTMLElement | { x: number; y: number };
+    currentColor: string | null;
+    onPick: (color: string | null) => void;
+}) {
+    document
+        .querySelectorAll(".ofc-color-popover")
+        .forEach((el) => el.remove());
+    let top: number;
+    let left: number;
+    if ("getBoundingClientRect" in opts.anchor) {
+        const rect = opts.anchor.getBoundingClientRect();
+        top = rect.bottom + 4;
+        left = rect.left;
+    } else {
+        top = opts.anchor.y;
+        left = opts.anchor.x;
+    }
+    const pop = document.createElement("div");
+    pop.className = "ofc-color-popover";
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+
+    for (const hex of EVENT_COLOR_PALETTE) {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "ofc-color-swatch";
+        dot.style.background = hex;
+        dot.setAttribute("aria-label", hex);
+        if (
+            opts.currentColor &&
+            opts.currentColor.toLowerCase() === hex.toLowerCase()
+        ) {
+            dot.classList.add("is-selected");
+        }
+        dot.onclick = (e) => {
+            e.stopPropagation();
+            pop.remove();
+            opts.onPick(hex);
+        };
+        pop.appendChild(dot);
+    }
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "ofc-color-clear";
+    clear.textContent = "Default";
+    clear.onclick = (e) => {
+        e.stopPropagation();
+        pop.remove();
+        opts.onPick(null);
+    };
+    pop.appendChild(clear);
+
+    document.body.appendChild(pop);
+
+    const closer = (e: MouseEvent) => {
+        if (!pop.contains(e.target as Node)) {
+            pop.remove();
+            document.removeEventListener("mousedown", closer, true);
+        }
+    };
+    setTimeout(
+        () => document.addEventListener("mousedown", closer, true),
+        0
+    );
+}
+
 export function renderCalendar(
     containerEl: HTMLElement,
     eventSources: EventSourceInput[],
@@ -214,6 +296,19 @@ export function renderCalendar(
                 e.preventDefault();
                 openContextMenuForEvent && openContextMenuForEvent(event, e);
             });
+
+            // Per-event color: expose as a CSS variable so overrides.css can
+            // paint both the left border and the translucent ::before overlay
+            // with the picked hex (the theme forces `background: transparent`
+            // on event chips, so FullCalendar's inline background-color alone
+            // is not enough).
+            const perEventColor = event.extendedProps.color as
+                | string
+                | undefined;
+            if (perEventColor) {
+                el.style.setProperty("--ofc-event-color", perEventColor);
+                el.classList.add("ofc-event-colored");
+            }
             if (toggleTask) {
                 if (event.extendedProps.isTask) {
                     const checkbox = document.createElement("input");

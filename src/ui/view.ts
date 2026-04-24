@@ -2,7 +2,7 @@ import "./overrides.css";
 import "./tailwind.gen.css";
 import { ItemView, Menu, Notice, WorkspaceLeaf } from "obsidian";
 import { Calendar, EventSourceInput } from "@fullcalendar/core";
-import { renderCalendar } from "./calendar";
+import { renderCalendar, openColorPalette } from "./calendar";
 import FullCalendarPlugin from "../main";
 import { FCError, PLUGIN_SLUG } from "../types";
 import {
@@ -357,6 +357,33 @@ export class CalendarView extends ItemView {
                                 return;
                             }
                             openFileForEvent(this.plugin.cache, this.app, e.id);
+                        })
+                    );
+                    menu.addItem((item) =>
+                        item.setTitle("Change color…").onClick(() => {
+                            openColorPalette({
+                                anchor: {
+                                    x: mouseEvent.clientX,
+                                    y: mouseEvent.clientY,
+                                },
+                                currentColor: (event.color as string) ?? null,
+                                onPick: async (color) => {
+                                    try {
+                                        await this.plugin.cache.processEvent(
+                                            e.id,
+                                            (ev) => {
+                                                const next: any = { ...ev };
+                                                if (color) next.color = color;
+                                                else delete next.color;
+                                                return next;
+                                            }
+                                        );
+                                    } catch (err: any) {
+                                        console.error(err);
+                                        new Notice(err.message);
+                                    }
+                                },
+                            });
                         })
                     );
                     menu.addItem((item) =>

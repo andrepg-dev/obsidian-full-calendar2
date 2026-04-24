@@ -106,10 +106,17 @@ export function toEventInput(
     id: string,
     frontmatter: OFCEvent
 ): EventInput | null {
+    const colorOverride = frontmatter.color
+        ? {
+              backgroundColor: frontmatter.color,
+              borderColor: frontmatter.color,
+          }
+        : {};
     let event: EventInput = {
         id,
         title: frontmatter.title,
         allDay: frontmatter.allDay,
+        ...colorOverride,
     };
     if (frontmatter.type === "recurring") {
         event = {
@@ -117,7 +124,7 @@ export function toEventInput(
             daysOfWeek: frontmatter.daysOfWeek.map((c) => DAYS.indexOf(c)),
             startRecur: frontmatter.startRecur,
             endRecur: frontmatter.endRecur,
-            extendedProps: { isTask: false },
+            extendedProps: { isTask: false, color: frontmatter.color },
         };
         if (!frontmatter.allDay) {
             event = {
@@ -164,10 +171,12 @@ export function toEventInput(
             id,
             title: frontmatter.title,
             allDay: frontmatter.allDay,
+            ...colorOverride,
             rrule: rrulestr(frontmatter.rrule, {
                 dtstart: dtstart.toJSDate(),
             }).toString(),
             exdate,
+            extendedProps: { isTask: false, color: frontmatter.color },
         };
 
         if (!frontmatter.allDay) {
@@ -213,6 +222,7 @@ export function toEventInput(
                         frontmatter.completed !== undefined &&
                         frontmatter.completed !== null,
                     taskCompleted: frontmatter.completed,
+                    color: frontmatter.color,
                 },
             };
         } else {
@@ -225,6 +235,7 @@ export function toEventInput(
                         frontmatter.completed !== undefined &&
                         frontmatter.completed !== null,
                     taskCompleted: frontmatter.completed,
+                    color: frontmatter.color,
                 },
             };
         }
@@ -237,8 +248,10 @@ export function fromEventApi(event: EventApi): OFCEvent {
     const isRecurring: boolean = event.extendedProps.daysOfWeek !== undefined;
     const startDate = getDate(event.start as Date);
     const endDate = getDate(event.end as Date);
+    const color: string | undefined = event.extendedProps.color;
     return {
         title: event.title,
+        ...(color ? { color } : {}),
         ...(event.allDay
             ? { allDay: true }
             : {

@@ -681,6 +681,80 @@
 	color: #fff;
 }
 
+/* ── Per-event color (Google-style palette) ────────────────── */
+/* The theme forces `background: transparent` on event chips and paints the
+ * fill via a ::before overlay bound to a global CSS var. To honor a per-event
+ * color we set `--ofc-event-color` on the element in eventDidMount and
+ * override the border + overlay here — keeping the same translucency as the
+ * default events so readability is consistent. */
+.fc-v-event.ofc-event-colored,
+.fc .fc-timegrid-event.ofc-event-colored {
+	border-left-color: var(--ofc-event-color) !important;
+}
+.fc-v-event.ofc-event-colored::before,
+.fc .fc-timegrid-event.ofc-event-colored::before {
+	background: var(--ofc-event-color) !important;
+}
+.fc-daygrid-event.ofc-event-colored .fc-daygrid-event-dot {
+	border-color: var(--ofc-event-color) !important;
+}
+.fc-list-event.ofc-event-colored .fc-list-event-dot {
+	border-color: var(--ofc-event-color) !important;
+}
+
+.ofc-color-popover {
+	position: fixed;
+	z-index: 10000;
+	display: grid;
+	grid-template-columns: repeat(2, 28px);
+	gap: 6px;
+	padding: 8px;
+	background: #fff;
+	border: 1px solid var(--ofc-line, #2a2a2a);
+	border-radius: 4px;
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.ofc-color-swatch {
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	position: relative;
+	transition: transform 100ms ease;
+}
+.ofc-color-swatch:hover {
+	transform: scale(1.1);
+}
+.ofc-color-swatch.is-selected::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	display: block;
+	background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+	background-repeat: no-repeat;
+	background-position: center;
+	background-size: 14px 14px;
+}
+.ofc-color-clear {
+	grid-column: 1 / -1;
+	border: 1px solid var(--ofc-hair, rgba(0, 0, 0, 0.15));
+	background: #fff;
+	padding: 4px 6px;
+	font-family: var(--ofc-font-mono, ui-monospace, monospace);
+	font-size: 10px;
+	letter-spacing: 0.4px;
+	text-transform: lowercase;
+	cursor: pointer;
+	border-radius: 2px;
+	color: var(--ofc-ink-2, #555);
+}
+.ofc-color-clear:hover {
+	border-color: var(--ofc-ink, #2a2a2a);
+	color: var(--ofc-ink, #2a2a2a);
+}
+
 /* Multi-selection: shift+click marca eventos con este outline. */
 .fc .ofc-selected.fc-event,
 .fc .fc-event.ofc-selected {

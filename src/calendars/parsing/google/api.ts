@@ -33,7 +33,42 @@ export type GoogleEvent = {
     recurrence?: string[];
     recurringEventId?: string;
     originalStartTime?: GoogleEventDateTime;
+    colorId?: string;
 };
+
+/**
+ * Google Calendar event color palette (colorId "1".."11" — the "event" palette,
+ * not the "calendar" palette). Hex values match the vibrant swatches Google's
+ * UI shows in its color picker.
+ */
+export const GOOGLE_EVENT_COLORS: { id: string; hex: string }[] = [
+    { id: "11", hex: "#D50000" }, // Tomato
+    { id: "4", hex: "#E67C73" }, // Flamingo
+    { id: "6", hex: "#F4511E" }, // Tangerine
+    { id: "5", hex: "#F6BF26" }, // Banana
+    { id: "2", hex: "#33B679" }, // Sage
+    { id: "10", hex: "#0B8043" }, // Basil
+    { id: "7", hex: "#039BE5" }, // Peacock
+    { id: "9", hex: "#3F51B5" }, // Blueberry
+    { id: "1", hex: "#7986CB" }, // Lavender
+    { id: "3", hex: "#8E24AA" }, // Grape
+    { id: "8", hex: "#616161" }, // Graphite
+];
+
+const HEX_TO_COLOR_ID = new Map(
+    GOOGLE_EVENT_COLORS.map((c) => [c.hex.toLowerCase(), c.id])
+);
+const COLOR_ID_TO_HEX = new Map(
+    GOOGLE_EVENT_COLORS.map((c) => [c.id, c.hex])
+);
+
+export function hexToGoogleColorId(hex: string): string | undefined {
+    return HEX_TO_COLOR_ID.get(hex.toLowerCase());
+}
+
+export function googleColorIdToHex(id: string): string | undefined {
+    return COLOR_ID_TO_HEX.get(id);
+}
 
 export type ListEventsResult = {
     events: GoogleEvent[];
@@ -311,6 +346,8 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
     const allDay = start.time === null;
     const title = g.summary || "(untitled)";
     const id = g.id;
+    const color = g.colorId ? googleColorIdToHex(g.colorId) : undefined;
+    const colorPart = color ? { color } : {};
 
     const timePart = allDay
         ? { allDay: true as const }
@@ -331,6 +368,7 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
                 rrule: parsed.rrule,
                 skipDates: parsed.skipDates,
                 ...timePart,
+                ...colorPart,
             };
             return validateEvent(candidate);
         }
@@ -349,6 +387,7 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
         date: start.date,
         endDate,
         ...timePart,
+        ...colorPart,
     };
     return validateEvent(candidate);
 }
@@ -467,6 +506,14 @@ export function ofcToGoogle(
     const body: Record<string, unknown> = {
         summary: event.title,
     };
+    if (event.color) {
+        const colorId = hexToGoogleColorId(event.color);
+        // Send null to clear a previously-set color when the hex is unknown
+        // (falls back to the calendar default).
+        body.colorId = colorId ?? null;
+    } else {
+        body.colorId = null;
+    }
     const reminders = buildReminders(reminderOverride);
     if (reminders) body.reminders = reminders;
 
