@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarInfo, OFCEvent } from "../../types";
-import { EVENT_COLOR_PALETTE } from "../calendar";
+import { EVENT_COLOR_GROUPS, getColorMeta } from "../calendar";
 
 function makeChangeListener<T>(
     setState: React.Dispatch<React.SetStateAction<T>>,
@@ -190,6 +190,23 @@ export const EditEvent = ({
         titleRef.current?.focus();
     }, []);
 
+    const [colorOpen, setColorOpen] = useState(false);
+    const colorRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!colorOpen) return;
+        const onDown = (e: MouseEvent) => {
+            if (
+                colorRef.current &&
+                !colorRef.current.contains(e.target as Node)
+            ) {
+                setColorOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", onDown);
+        return () => document.removeEventListener("mousedown", onDown);
+    }, [colorOpen]);
+    const colorMeta = color ? getColorMeta(color) : null;
+
     const computedMins = useMemo(
         () => computeDurationMins(startTime, endTime),
         [startTime, endTime]
@@ -309,39 +326,110 @@ export const EditEvent = ({
                     />
                 </label>
 
-                <div className="ofc-field">
+                <label className="ofc-field">
                     <span className="ofc-field-label">COLOR</span>
-                    <div className="ofc-dialog-color-row">
-                        {EVENT_COLOR_PALETTE.map((hex) => {
-                            const isSelected =
-                                !!color &&
-                                color.toLowerCase() === hex.toLowerCase();
-                            return (
-                                <button
-                                    key={hex}
-                                    type="button"
-                                    className={
-                                        "ofc-dialog-swatch" +
-                                        (isSelected ? " is-selected" : "")
-                                    }
-                                    style={{ background: hex }}
-                                    aria-label={hex}
-                                    onClick={() => setColor(hex)}
-                                />
-                            );
-                        })}
+                    <div
+                        className="ofc-color-dropdown"
+                        ref={colorRef}
+                        onMouseEnter={() => setColorOpen(true)}
+                        onMouseLeave={() => setColorOpen(false)}
+                    >
                         <button
                             type="button"
-                            className={
-                                "ofc-dialog-swatch ofc-dialog-swatch-default" +
-                                (!color ? " is-selected" : "")
-                            }
-                            aria-label="Default color"
-                            title="Default (calendar color)"
-                            onClick={() => setColor(undefined)}
-                        />
+                            className="ofc-input ofc-color-dropdown-trigger"
+                            onClick={() => setColorOpen((v) => !v)}
+                            aria-haspopup="listbox"
+                            aria-expanded={colorOpen}
+                        >
+                            <span
+                                className={
+                                    "ofc-dialog-swatch" +
+                                    (!color
+                                        ? " ofc-dialog-swatch-default"
+                                        : "")
+                                }
+                                style={
+                                    color ? { background: color } : undefined
+                                }
+                                aria-hidden
+                            />
+                            <span className="ofc-color-dropdown-text">
+                                {color
+                                    ? colorMeta
+                                        ? `${colorMeta.group} · ${colorMeta.name}`
+                                        : color
+                                    : "Default (calendar color)"}
+                            </span>
+                            <span className="ofc-color-dropdown-caret">▾</span>
+                        </button>
+                        {colorOpen && (
+                            <div
+                                className="ofc-color-dropdown-popover"
+                                role="listbox"
+                            >
+                                {EVENT_COLOR_GROUPS.map((group) => (
+                                    <div
+                                        key={group.label}
+                                        className="ofc-dialog-color-group"
+                                    >
+                                        <span className="ofc-dialog-color-group-label">
+                                            {group.label}
+                                        </span>
+                                        <div className="ofc-dialog-color-row">
+                                            {group.colors.map((c) => {
+                                                const isSelected =
+                                                    !!color &&
+                                                    color.toLowerCase() ===
+                                                        c.hex.toLowerCase();
+                                                return (
+                                                    <button
+                                                        key={c.hex}
+                                                        type="button"
+                                                        className={
+                                                            "ofc-dialog-swatch" +
+                                                            (isSelected
+                                                                ? " is-selected"
+                                                                : "")
+                                                        }
+                                                        style={{
+                                                            background: c.hex,
+                                                        }}
+                                                        title={c.name}
+                                                        aria-label={c.name}
+                                                        onClick={() => {
+                                                            setColor(c.hex);
+                                                            setColorOpen(false);
+                                                        }}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                                <div className="ofc-dialog-color-group">
+                                    <span className="ofc-dialog-color-group-label">
+                                        DEFAULT
+                                    </span>
+                                    <div className="ofc-dialog-color-row">
+                                        <button
+                                            type="button"
+                                            className={
+                                                "ofc-dialog-swatch ofc-dialog-swatch-default" +
+                                                (!color ? " is-selected" : "")
+                                            }
+                                            aria-label="Default color"
+                                            title="Default (calendar color)"
+                                            onClick={() => {
+                                                setColor(undefined);
+                                                setColorOpen(false);
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
-                </div>
+                </label>
 
                 <div className="ofc-grid-2">
                     <label className="ofc-field">

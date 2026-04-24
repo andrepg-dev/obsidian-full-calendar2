@@ -59,20 +59,49 @@ interface ExtraRenderProps {
     selectedEventIds?: Set<string>;
 }
 
-// Google Calendar event palette — mirrors the 11 swatches in the Google UI.
-export const EVENT_COLOR_PALETTE: string[] = [
-    "#D50000", // Tomato
-    "#E67C73", // Flamingo
-    "#F4511E", // Tangerine
-    "#F6BF26", // Banana
-    "#33B679", // Sage
-    "#0B8043", // Basil
-    "#039BE5", // Peacock
-    "#3F51B5", // Blueberry
-    "#7986CB", // Lavender
-    "#8E24AA", // Grape
-    "#616161", // Graphite
+// Event color groups — warm = productive/focus, cool = rest/calm, neutral = misc.
+export const EVENT_COLOR_GROUPS: {
+    label: string;
+    colors: { hex: string; name: string }[];
+}[] = [
+    {
+        label: "PRODUCTIVO",
+        colors: [
+            { hex: "#D50000", name: "Tomato" },
+            { hex: "#F4511E", name: "Tangerine" },
+            { hex: "#F6BF26", name: "Banana" },
+            { hex: "#E67C73", name: "Flamingo" },
+        ],
+    },
+    {
+        label: "DESCANSO",
+        colors: [
+            { hex: "#33B679", name: "Sage" },
+            { hex: "#039BE5", name: "Peacock" },
+            { hex: "#7986CB", name: "Lavender" },
+            { hex: "#8E24AA", name: "Grape" },
+        ],
+    },
+    {
+        label: "NEUTRO",
+        colors: [{ hex: "#616161", name: "Graphite" }],
+    },
 ];
+
+export const EVENT_COLOR_PALETTE: string[] = EVENT_COLOR_GROUPS.flatMap((g) =>
+    g.colors.map((c) => c.hex)
+);
+
+export function getColorMeta(
+    hex: string
+): { name: string; group: string } | null {
+    const target = hex.toLowerCase();
+    for (const g of EVENT_COLOR_GROUPS) {
+        const found = g.colors.find((c) => c.hex.toLowerCase() === target);
+        if (found) return { name: found.name, group: g.label };
+    }
+    return null;
+}
 
 export function openColorPalette(opts: {
     anchor: HTMLElement | { x: number; y: number };

@@ -589,7 +589,90 @@
 	cursor: pointer;
 }
 
+/* ── Color dropdown inside the edit/create dialog ────────── */
+.ofc-color-dropdown {
+	position: relative;
+	width: 100%;
+}
+.ofc-color-dropdown-trigger {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	text-align: left;
+}
+.ofc-color-dropdown-trigger .ofc-dialog-swatch {
+	width: 16px;
+	height: 16px;
+	flex-shrink: 0;
+	cursor: inherit;
+}
+.ofc-color-dropdown-trigger .ofc-dialog-swatch:hover {
+	transform: none;
+}
+.ofc-color-dropdown-text {
+	flex: 1;
+	font-size: 12px;
+	color: var(--ofc-d-ink);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.ofc-color-dropdown-caret {
+	font-size: 10px;
+	color: var(--ofc-d-ink-3);
+}
+.ofc-color-dropdown-popover {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 50;
+}
+.ofc-color-dropdown-popover::before {
+	content: "";
+	position: absolute;
+	top: -6px;
+	left: 0;
+	right: 0;
+	height: 6px;
+}
+.ofc-color-dropdown-popover {
+	background: #fff;
+	border: 1px solid var(--ofc-d-line);
+	border-radius: 1px;
+	padding: 10px 12px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+	display: flex;
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 16px;
+	width: max-content;
+	max-width: calc(100vw - 40px);
+}
+.ofc-color-dropdown-popover .ofc-dialog-color-group + .ofc-dialog-color-group {
+	border-left: 1px solid var(--ofc-d-hair);
+	padding-left: 16px;
+}
+
 /* ── Color palette inside the edit/create dialog ─────────── */
+.ofc-dialog-color-groups {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px 20px;
+	align-items: flex-start;
+}
+.ofc-dialog-color-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.ofc-dialog-color-group-label {
+	font-family: var(--ofc-d-mono);
+	font-size: 10px;
+	letter-spacing: 0.6px;
+	color: var(--ofc-d-ink-3);
+	text-transform: uppercase;
+}
 .ofc-dialog-color-row {
 	display: flex;
 	flex-wrap: wrap;
