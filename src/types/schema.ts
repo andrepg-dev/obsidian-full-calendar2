@@ -60,6 +60,7 @@ export const TimeSchema = z.discriminatedUnion("allDay", [
 
 export const CommonSchema = z.object({
     title: z.string(),
+    description: z.string().optional(),
     id: z.string().optional(),
     color: z.string().optional(),
 });

@@ -118,13 +118,17 @@ export function toEventInput(
         allDay: frontmatter.allDay,
         ...colorOverride,
     };
+    const baseExtendedProps = {
+        color: frontmatter.color,
+        description: frontmatter.description,
+    };
     if (frontmatter.type === "recurring") {
         event = {
             ...event,
             daysOfWeek: frontmatter.daysOfWeek.map((c) => DAYS.indexOf(c)),
             startRecur: frontmatter.startRecur,
             endRecur: frontmatter.endRecur,
-            extendedProps: { isTask: false, color: frontmatter.color },
+            extendedProps: { isTask: false, ...baseExtendedProps },
         };
         if (!frontmatter.allDay) {
             event = {
@@ -176,7 +180,7 @@ export function toEventInput(
                 dtstart: dtstart.toJSDate(),
             }).toString(),
             exdate,
-            extendedProps: { isTask: false, color: frontmatter.color },
+            extendedProps: { isTask: false, ...baseExtendedProps },
         };
 
         if (!frontmatter.allDay) {
@@ -222,7 +226,7 @@ export function toEventInput(
                         frontmatter.completed !== undefined &&
                         frontmatter.completed !== null,
                     taskCompleted: frontmatter.completed,
-                    color: frontmatter.color,
+                    ...baseExtendedProps,
                 },
             };
         } else {
@@ -235,7 +239,7 @@ export function toEventInput(
                         frontmatter.completed !== undefined &&
                         frontmatter.completed !== null,
                     taskCompleted: frontmatter.completed,
-                    color: frontmatter.color,
+                    ...baseExtendedProps,
                 },
             };
         }
@@ -251,6 +255,7 @@ export function fromEventApi(event: EventApi): OFCEvent {
     const color: string | undefined = event.extendedProps.color;
     return {
         title: event.title,
+        description: event.extendedProps.description || "",
         ...(color ? { color } : {}),
         ...(event.allDay
             ? { allDay: true }

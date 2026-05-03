@@ -159,6 +159,7 @@ export const EditEvent = ({
     const [startTime, setStartTime] = useState(initialStartTime);
     const [endTime, setEndTime] = useState(initialEndTime);
     const [title, setTitle] = useState(initialEvent?.title || "");
+    const [description, setDescription] = useState(initialEvent?.description || "");
     const [isRecurring, setIsRecurring] = useState(
         initialEvent?.type === "recurring" || false
     );
@@ -186,9 +187,24 @@ export const EditEvent = ({
     );
 
     const titleRef = useRef<HTMLInputElement>(null);
+    const descriptionRef = useRef<HTMLTextAreaElement>(null);
+
+    const autoResizeDescription = () => {
+        const el = descriptionRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        const maxHeightPx = 200;
+        const nextHeight = Math.min(el.scrollHeight, maxHeightPx);
+        el.style.height = `${nextHeight}px`;
+        el.style.overflowY = el.scrollHeight > maxHeightPx ? "auto" : "hidden";
+    };
+
     useEffect(() => {
         titleRef.current?.focus();
     }, []);
+    useEffect(() => {
+        autoResizeDescription();
+    }, [description]);
 
     const [colorOpen, setColorOpen] = useState(false);
     const colorRef = useRef<HTMLDivElement>(null);
@@ -233,6 +249,7 @@ export const EditEvent = ({
         await submit(
             {
                 ...{ title },
+                description: description.trim(),
                 ...(color ? { color } : {}),
                 ...(allDay
                     ? { allDay: true }
@@ -323,6 +340,26 @@ export const EditEvent = ({
                         placeholder="Add title…"
                         required
                         onChange={makeChangeListener(setTitle, (x) => x)}
+                    />
+                </label>
+
+                <label className="ofc-field">
+                    <span className="ofc-field-label">DESCRIPTION</span>
+                    <textarea
+                        ref={descriptionRef}
+                        className="ofc-input"
+                        value={description}
+                        placeholder="Add description..."
+                        rows={1}
+                        style={{
+                            resize: "none",
+                            maxHeight: "200px",
+                            overflowY: "hidden",
+                        }}
+                        onChange={(e) => {
+                            setDescription(e.target.value);
+                            autoResizeDescription();
+                        }}
                     />
                 </label>
 

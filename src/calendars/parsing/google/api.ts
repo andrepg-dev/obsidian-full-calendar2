@@ -28,6 +28,7 @@ export type GoogleEvent = {
     id: string;
     status?: GoogleEventStatus;
     summary?: string;
+    description?: string;
     start?: GoogleEventDateTime;
     end?: GoogleEventDateTime;
     recurrence?: string[];
@@ -345,6 +346,7 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
 
     const allDay = start.time === null;
     const title = g.summary || "(untitled)";
+    const descriptionPart = g.description ? { description: g.description } : {};
     const id = g.id;
     const color = g.colorId ? googleColorIdToHex(g.colorId) : undefined;
     const colorPart = color ? { color } : {};
@@ -363,6 +365,7 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
             const candidate = {
                 id,
                 title,
+                ...descriptionPart,
                 type: "rrule" as const,
                 startDate: start.date,
                 rrule: parsed.rrule,
@@ -383,6 +386,7 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
     const candidate = {
         id,
         title,
+        ...descriptionPart,
         type: "single" as const,
         date: start.date,
         endDate,
@@ -505,6 +509,8 @@ export function ofcToGoogle(
 ): Record<string, unknown> {
     const body: Record<string, unknown> = {
         summary: event.title,
+        // Send null when absent so PATCH clears previous Google description.
+        description: event.description || null,
     };
     if (event.color) {
         const colorId = hexToGoogleColorId(event.color);
