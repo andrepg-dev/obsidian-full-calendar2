@@ -87,7 +87,11 @@ export function dateEndpointsToFrontmatter(
     allDay: boolean
 ): Partial<OFCEvent> {
     const date = getDate(start);
-    const endDate = getDate(end);
+    // FullCalendar uses an exclusive `end` for all-day selections.
+    // Convert to an inclusive endDate for our frontmatter model.
+    const endDate = allDay
+        ? DateTime.fromJSDate(end).minus({ days: 1 }).toISODate()
+        : getDate(end);
     return {
         type: "single",
         date,
@@ -233,7 +237,12 @@ export function toEventInput(
             event = {
                 ...event,
                 start: frontmatter.date,
-                end: frontmatter.endDate || undefined,
+                // FullCalendar expects `end` to be exclusive for all-day events.
+                end: frontmatter.endDate
+                    ? DateTime.fromISO(frontmatter.endDate, { zone: "utc" })
+                          .plus({ days: 1 })
+                          .toISODate()
+                    : undefined,
                 extendedProps: {
                     isTask:
                         frontmatter.completed !== undefined &&
@@ -251,7 +260,10 @@ export function toEventInput(
 export function fromEventApi(event: EventApi): OFCEvent {
     const isRecurring: boolean = event.extendedProps.daysOfWeek !== undefined;
     const startDate = getDate(event.start as Date);
-    const endDate = getDate(event.end as Date);
+    // FullCalendar stores all-day `end` as exclusive; normalize to inclusive endDate.
+    const endDate = event.allDay
+        ? DateTime.fromJSDate(event.end as Date).minus({ days: 1 }).toISODate()
+        : getDate(event.end as Date);
     const color: string | undefined = event.extendedProps.color;
     return {
         title: event.title,
