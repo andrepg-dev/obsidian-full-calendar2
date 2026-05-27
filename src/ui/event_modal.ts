@@ -25,12 +25,13 @@ export function launchCreateModal(
                 name: cal.name,
             };
         });
-    new ReactModal(plugin.app, async (closeModal) =>
+    new ReactModal(plugin.app, async (closeModal, registerCloseRequest) =>
         React.createElement(EditEvent, {
             initialEvent: partialEvent,
             calendars,
             defaultCalendarIndex: 0,
             cancel: closeModal,
+            registerCloseRequest,
             submit: async (data, calendarIndex) => {
                 const calendarId = calendars[calendarIndex].id;
                 try {
@@ -70,12 +71,13 @@ export function launchEditModal(plugin: FullCalendarPlugin, eventId: string) {
 
     const calIdx = calendars.findIndex(({ id }) => id === calId);
 
-    new ReactModal(plugin.app, async (closeModal) =>
+    new ReactModal(plugin.app, async (closeModal, registerCloseRequest) =>
         React.createElement(EditEvent, {
             initialEvent: eventToEdit,
             calendars,
             defaultCalendarIndex: calIdx,
             cancel: closeModal,
+            registerCloseRequest,
             submit: async (data, calendarIndex) => {
                 try {
                     if (calendarIndex !== calIdx) {

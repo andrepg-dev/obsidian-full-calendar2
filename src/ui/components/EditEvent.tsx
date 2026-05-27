@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import * as React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarInfo, OFCEvent } from "../../types";
 import { EVENT_COLOR_GROUPS, getColorMeta } from "../calendar";
 
@@ -63,6 +63,7 @@ interface EditEventProps {
     open?: () => Promise<void>;
     deleteEvent?: () => Promise<void>;
     cancel?: () => void;
+    registerCloseRequest?: (handler?: () => void) => void;
 }
 
 function computeDurationMins(start: string, end: string): number | null {
@@ -125,6 +126,7 @@ export const EditEvent = ({
     open,
     deleteEvent,
     cancel,
+    registerCloseRequest,
     calendars,
     defaultCalendarIndex,
 }: EditEventProps) => {
@@ -188,6 +190,7 @@ export const EditEvent = ({
 
     const titleRef = useRef<HTMLInputElement>(null);
     const descriptionRef = useRef<HTMLTextAreaElement>(null);
+    const formRef = useRef<HTMLFormElement>(null);
 
     const autoResizeDescription = () => {
         const el = descriptionRef.current;
@@ -244,46 +247,92 @@ export const EditEvent = ({
         setDurationDraft(null);
     };
 
+    const buildEvent = (): OFCEvent =>
+        ({
+            ...{ title },
+            description: description.trim(),
+            ...(color ? { color } : {}),
+            ...(allDay
+                ? { allDay: true }
+                : { allDay: false, startTime: startTime || "", endTime }),
+            ...(isRecurring
+                ? {
+                      type: "recurring",
+                      daysOfWeek: daysOfWeek as (
+                          | "U"
+                          | "M"
+                          | "T"
+                          | "W"
+                          | "R"
+                          | "F"
+                          | "S"
+                      )[],
+                      startRecur: date || undefined,
+                      endRecur: endRecur || undefined,
+                  }
+                : {
+                      type: "single",
+                      date: date || "",
+                      endDate: endDate || null,
+                      completed: isTask ? complete : null,
+                  }),
+        }) as OFCEvent;
+
+    const formSnapshot = JSON.stringify({ event: buildEvent(), calendarIndex });
+    const initialFormSnapshot = useRef(formSnapshot);
+    const isDirty = initialFormSnapshot.current !== formSnapshot;
+    const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+    const isDirtyRef = useRef(isDirty);
+    const showCloseConfirmRef = useRef(showCloseConfirm);
+    isDirtyRef.current = isDirty;
+    showCloseConfirmRef.current = showCloseConfirm;
+
+    const requestClose = useCallback(() => {
+        if (!cancel) return;
+        if (showCloseConfirmRef.current) {
+            setShowCloseConfirm(false);
+            return;
+        }
+        if (isDirtyRef.current) {
+            setShowCloseConfirm(true);
+            return;
+        }
+        cancel();
+    }, [cancel]);
+
+    useEffect(() => {
+        registerCloseRequest?.(requestClose);
+        return () => registerCloseRequest?.(undefined);
+    }, [registerCloseRequest, requestClose]);
+
+    const saveAndClose = () => {
+        setShowCloseConfirm(false);
+        formRef.current?.requestSubmit();
+    };
+
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        await submit(
-            {
-                ...{ title },
-                description: description.trim(),
-                ...(color ? { color } : {}),
-                ...(allDay
-                    ? { allDay: true }
-                    : { allDay: false, startTime: startTime || "", endTime }),
-                ...(isRecurring
-                    ? {
-                          type: "recurring",
-                          daysOfWeek: daysOfWeek as (
-                              | "U"
-                              | "M"
-                              | "T"
-                              | "W"
-                              | "R"
-                              | "F"
-                              | "S"
-                          )[],
-                          startRecur: date || undefined,
-                          endRecur: endRecur || undefined,
-                      }
-                    : {
-                          type: "single",
-                          date: date || "",
-                          endDate: endDate || null,
-                          completed: isTask ? complete : null,
-                      }),
-            },
-            calendarIndex
-        );
+        setShowCloseConfirm(false);
+        await submit(buildEvent(), calendarIndex);
+    };
+
+    // Cmd/Ctrl+Enter closes the modal immediately and fires the save in the
+    // background. Errors from `submit` are surfaced by the caller via a Notice.
+    const fastSubmit = (form: HTMLFormElement) => {
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
+        }
+        if (durationDraft !== null) commitDuration();
+        const data = buildEvent();
+        if (cancel) cancel();
+        void submit(data, calendarIndex);
     };
 
     const onKey = (e: React.KeyboardEvent<HTMLFormElement>) => {
         if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
             e.preventDefault();
-            (e.currentTarget as HTMLFormElement).requestSubmit();
+            fastSubmit(e.currentTarget as HTMLFormElement);
         } else if (
             e.key === "Enter" &&
             (e.target as HTMLElement).classList?.contains("ofc-dialog-swatch")
@@ -292,7 +341,12 @@ export const EditEvent = ({
             (e.currentTarget as HTMLFormElement).requestSubmit();
         } else if (e.key === "Escape" && cancel) {
             e.preventDefault();
-            cancel();
+            e.stopPropagation();
+            if (showCloseConfirm) {
+                setShowCloseConfirm(false);
+                return;
+            }
+            requestClose();
         }
     };
 
@@ -306,10 +360,54 @@ export const EditEvent = ({
 
     return (
         <form
+            ref={formRef}
             className="ofc-dialog"
             onSubmit={handleSubmit}
             onKeyDown={onKey}
         >
+            {showCloseConfirm && (
+                <div
+                    className="ofc-close-confirm"
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-labelledby="ofc-close-confirm-title"
+                >
+                    <div className="ofc-close-confirm-panel">
+                        <span
+                            className="ofc-close-confirm-title"
+                            id="ofc-close-confirm-title"
+                        >
+                            Save changes?
+                        </span>
+                        <span className="ofc-close-confirm-copy">
+                            This event has unsaved changes.
+                        </span>
+                        <div className="ofc-close-confirm-actions">
+                            <button
+                                type="button"
+                                className="ofc-btn ofc-btn-ghost"
+                                onClick={() => setShowCloseConfirm(false)}
+                            >
+                                Keep editing
+                            </button>
+                            <button
+                                type="button"
+                                className="ofc-btn ofc-btn-ghost"
+                                onClick={cancel}
+                            >
+                                Discard
+                            </button>
+                            <button
+                                type="button"
+                                className="ofc-btn ofc-btn-primary"
+                                onClick={saveAndClose}
+                            >
+                                Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <header className="ofc-dialog-header">
                 <span className="ofc-dialog-title">
                     {isEdit ? "Edit event" : "New event"}
@@ -650,7 +748,7 @@ export const EditEvent = ({
                         <button
                             type="button"
                             className="ofc-btn ofc-btn-ghost"
-                            onClick={cancel}
+                            onClick={requestClose}
                         >
                             Cancel
                         </button>

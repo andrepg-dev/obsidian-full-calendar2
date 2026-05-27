@@ -429,6 +429,7 @@
 		Consolas, monospace;
 
 	display: flex;
+	position: relative;
 	flex-direction: column;
 	width: 100%;
 	background: #fff;
@@ -804,6 +805,45 @@
 .ofc-dialog .ofc-btn-danger:hover {
 	background: var(--ofc-d-danger);
 	color: #fff;
+}
+
+.ofc-close-confirm {
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgba(255, 255, 255, 0.78);
+}
+.ofc-close-confirm-panel {
+	width: min(100%, 360px);
+	border: 1px solid var(--ofc-d-line);
+	background: #fff;
+	padding: 18px;
+	box-shadow: 0 12px 30px rgba(25, 28, 38, 0.14);
+}
+.ofc-close-confirm-title,
+.ofc-close-confirm-copy {
+	display: block;
+	font-family: var(--ofc-d-ui);
+}
+.ofc-close-confirm-title {
+	color: var(--ofc-d-ink);
+	font-size: 15px;
+	font-weight: 600;
+}
+.ofc-close-confirm-copy {
+	margin-top: 6px;
+	color: var(--ofc-d-ink-2);
+	font-size: 13px;
+}
+.ofc-close-confirm-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
 }
 
 /* ── Per-event color (Google-style palette) ────────────────── */
