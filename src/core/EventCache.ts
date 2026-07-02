@@ -92,6 +92,9 @@ export default class EventCache {
 
     private store = new EventStore();
     calendars = new Map<string, Calendar>();
+    private lastDeletedGoogleEvent:
+        | { calendarId: string; event: OFCEvent }
+        | null = null;
 
     private pkCounter = 0;
 
@@ -119,6 +122,7 @@ export default class EventCache {
         this.initialized = false;
         this.calendarInfos = infos;
         this.pkCounter = 0;
+        this.lastDeletedGoogleEvent = null;
         this.calendars.clear();
         this.store.clear();
         this.resync();
@@ -198,6 +202,20 @@ export default class EventCache {
             cal instanceof EditableCalendar ||
             cal instanceof WritableRemoteCalendar
         );
+    }
+
+    /**
+     * Whether "task" checkbox state can be stored for this event (`completed`
+     * in vault notes). Remote calendars do not persist this field, and recurring
+     * / rrule models are not updated by the task toggle helpers.
+     */
+    supportsVaultTaskToggle(eventId: string): boolean {
+        const details = this.store.getEventDetails(eventId);
+        if (!details || details.event.type !== "single") {
+            return false;
+        }
+        const cal = this.calendars.get(details.calendarId);
+        return cal instanceof EditableCalendar;
     }
 
     getEventById(s: string): OFCEvent | null {
@@ -369,12 +387,54 @@ export default class EventCache {
             return;
         }
         if (calendar instanceof WritableRemoteCalendar) {
+            const deletedEvent = { ...details.event };
             this.store.delete(eventId);
             await calendar.deleteRemoteEvent(eventId);
+            if (calendar.type === "google") {
+                this.lastDeletedGoogleEvent = {
+                    calendarId: calendar.id,
+                    event: deletedEvent,
+                };
+            }
             this.updateViews([eventId], []);
             return;
         }
         throw new Error("Read-only events cannot be deleted.");
+    }
+
+    canUndoDeletedGoogleEvent(): boolean {
+        return this.lastDeletedGoogleEvent !== null;
+    }
+
+    async undoLastDeletedGoogleEvent(): Promise<CacheEntry | null> {
+        const pending = this.lastDeletedGoogleEvent;
+        if (!pending) {
+            return null;
+        }
+        const calendar = this.calendars.get(pending.calendarId);
+        if (!(calendar instanceof WritableRemoteCalendar)) {
+            this.lastDeletedGoogleEvent = null;
+            throw new Error("Original Google calendar is no longer available.");
+        }
+
+        const eventToRestore = { ...pending.event };
+        delete eventToRestore.id;
+        const remoteId = await calendar.createRemoteEvent(eventToRestore);
+        const restoredEvent = { ...eventToRestore, id: remoteId };
+        this.store.add({
+            calendar,
+            location: null,
+            id: remoteId,
+            event: restoredEvent,
+        });
+        const restored = {
+            id: remoteId,
+            calendarId: calendar.id,
+            event: restoredEvent,
+        };
+        this.lastDeletedGoogleEvent = null;
+        this.updateViews([], [restored]);
+        return restored;
     }
 
     /**

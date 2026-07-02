@@ -21,3 +21,37 @@ export const toggleTask = (event: OFCEvent, isDone: boolean): OFCEvent => {
         return { ...event, completed: false };
     }
 };
+
+export const googleTitleTaskState = (
+    title: string
+): "completed" | "uncompleted" | "inprogress" | null => {
+    const trimmed = title.trimStart();
+    if (trimmed.startsWith("✅")) {
+        return "completed";
+    }
+    if (trimmed.startsWith("❌")) {
+        return "uncompleted";
+    }
+    if (trimmed.startsWith("🚧")) {
+        return "inprogress";
+    }
+    return null;
+};
+
+const stripGoogleTaskPrefix = (title: string): string =>
+    title.trimStart().replace(/^(✅|❌|🚧)\s*/, "");
+
+export const markGoogleTitleTaskState = (
+    event: OFCEvent,
+    state: "completed" | "uncompleted" | "inprogress"
+): OFCEvent => {
+    const plainTitle = stripGoogleTaskPrefix(event.title);
+    const prefix =
+        state === "completed" ? "✅" : state === "uncompleted" ? "❌" : "🚧";
+    return { ...event, title: `${prefix} ${plainTitle}`.trim() };
+};
+
+export const clearGoogleTitleTaskState = (event: OFCEvent): OFCEvent => ({
+    ...event,
+    title: stripGoogleTaskPrefix(event.title),
+});

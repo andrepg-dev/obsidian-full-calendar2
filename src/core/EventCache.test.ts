@@ -5,6 +5,7 @@ import {
     EditableCalendar,
     EditableEventResponse,
 } from "../calendars/EditableCalendar";
+import WritableRemoteCalendar from "../calendars/WritableRemoteCalendar";
 import { CalendarInfo, EventLocation, OFCEvent } from "src/types";
 import EventCache, {
     CacheEntry,
@@ -53,6 +54,39 @@ class TestReadonlyCalendar extends Calendar {
     async getEvents(): Promise<EventResponse[]> {
         return this.events.map((event) => [event, null]);
     }
+}
+
+class TestGoogleCalendar extends WritableRemoteCalendar {
+    events: OFCEvent[];
+    constructor(color: string, events: OFCEvent[]) {
+        super(color);
+        this.events = events;
+    }
+
+    get type(): "google" {
+        return "google";
+    }
+
+    get identifier(): string {
+        return "account@example.com::primary";
+    }
+
+    get name(): string {
+        return "Google Test";
+    }
+
+    getEvents = jest.fn(async () =>
+        this.events.map((event) => [event, null] as EventResponse)
+    );
+    revalidate = jest.fn(async () => undefined);
+    createRemoteEvent = jest.fn(async (event: OFCEvent) => {
+        this.events = [...this.events, { ...event, id: "restored-id" }];
+        return "restored-id";
+    });
+    updateRemoteEvent = jest.fn();
+    deleteRemoteEvent = jest.fn(async (remoteId: string) => {
+        this.events = this.events.filter((event) => event.id !== remoteId);
+    });
 }
 
 // For tests, we only want test calendars to
@@ -192,6 +226,52 @@ describe("event cache with readonly calendar", () => {
         const eventId = sources[0].events[0].id;
 
         assertFailed(async () => await f(cache, eventId), /read-only/i);
+    });
+});
+
+describe("event cache with google calendar", () => {
+    const makeCache = (events: OFCEvent[]) => {
+        const calendar = new TestGoogleCalendar("#000000", events);
+        const cache = new EventCache({
+            ...initializerMap(() => null),
+            google: () => calendar,
+        });
+        cache.reset([
+            {
+                type: "google",
+                color: "#000000",
+                accountEmail: "account@example.com",
+                calendarId: "primary",
+                calendarSummary: "Google Test",
+                refreshToken: "refresh-token",
+            },
+        ]);
+        return { cache, calendar };
+    };
+
+    it("restores the last deleted google event", async () => {
+        const event = { ...mockEvent(), id: "google-id" };
+        const { cache, calendar } = makeCache([event]);
+        await cache.populate();
+
+        await cache.deleteEvent("google-id");
+
+        expect(calendar.deleteRemoteEvent).toHaveBeenCalledWith("google-id");
+        expect(cache.canUndoDeletedGoogleEvent()).toBeTruthy();
+        expect(cache.getEventById("google-id")).toBeNull();
+
+        const restored = await cache.undoLastDeletedGoogleEvent();
+
+        expect(calendar.createRemoteEvent).toHaveBeenCalledWith({
+            title: event.title,
+        });
+        expect(restored?.id).toEqual("restored-id");
+        expect(restored?.event).toEqual({
+            title: event.title,
+            id: "restored-id",
+        });
+        expect(cache.getEventById("restored-id")).toEqual(restored?.event);
+        expect(cache.canUndoDeletedGoogleEvent()).toBeFalsy();
     });
 });
 

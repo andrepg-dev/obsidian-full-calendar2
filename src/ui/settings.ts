@@ -28,6 +28,7 @@ export interface FullCalendarSettings {
     timeFormat24h: boolean;
     slotMinutes: number;
     snapMinutes: number;
+    shiftCreateSnapMinutes: number;
     clickToCreateEventFromMonthView: boolean;
     googleClientId: string;
     googleClientSecret: string;
@@ -46,6 +47,7 @@ export const DEFAULT_SETTINGS: FullCalendarSettings = {
     timeFormat24h: false,
     slotMinutes: 30,
     snapMinutes: 15,
+    shiftCreateSnapMinutes: 10,
     clickToCreateEventFromMonthView: true,
     googleClientId: "",
     googleClientSecret: "",
@@ -310,6 +312,35 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
+            .setName("Shift-create snap interval")
+            .setDesc(
+                "Minimum increment when creating events while holding Shift. Drag and resize still use the normal snap interval."
+            )
+            .addDropdown((dropdown) => {
+                const options: Record<string, string> = {
+                    "1": "1 minute",
+                    "5": "5 minutes",
+                    "10": "10 minutes",
+                    "15": "15 minutes",
+                    "20": "20 minutes",
+                    "30": "30 minutes",
+                    "60": "1 hour",
+                };
+                Object.entries(options).forEach(([value, display]) => {
+                    dropdown.addOption(value, display);
+                });
+                dropdown.setValue(
+                    String(this.plugin.settings.shiftCreateSnapMinutes ?? 10)
+                );
+                dropdown.onChange(async (value) => {
+                    const parsed = Number.parseInt(value, 10);
+                    this.plugin.settings.shiftCreateSnapMinutes =
+                        Number.isFinite(parsed) ? parsed : 10;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(containerEl)
             .setName("Click on a day in month view to create event")
             .setDesc("Switch off to open day view on click instead.")
             .addToggle((toggle) => {
@@ -380,25 +411,25 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             'Go to <a href="https://console.cloud.google.com/projectcreate" target="_blank">console.cloud.google.com</a> and create a new project (any name).'
         );
         step(
-            'Open <b>APIs &amp; Services → Library</b>, search for <b>Google Calendar API</b>, and click <b>Enable</b>.'
+            "Open <b>APIs &amp; Services → Library</b>, search for <b>Google Calendar API</b>, and click <b>Enable</b>."
         );
         step(
-            'Open <b>APIs &amp; Services → OAuth consent screen</b>. Pick <b>External</b>, then fill in the required fields (app name, your email, developer email). You can leave everything else blank.'
+            "Open <b>APIs &amp; Services → OAuth consent screen</b>. Pick <b>External</b>, then fill in the required fields (app name, your email, developer email). You can leave everything else blank."
         );
         step(
-            'In the <b>Scopes</b> step, click <b>Add or remove scopes</b> and add <code>.../auth/calendar</code>. Save.'
+            "In the <b>Scopes</b> step, click <b>Add or remove scopes</b> and add <code>.../auth/calendar</code>. Save."
         );
         step(
-            'In the <b>Test users</b> step, add the Gmail account you want to sync. Save.'
+            "In the <b>Test users</b> step, add the Gmail account you want to sync. Save."
         );
         step(
-            'Open <b>APIs &amp; Services → Credentials → Create credentials → OAuth client ID</b>. Choose <b>Desktop app</b> as the application type. Click Create.'
+            "Open <b>APIs &amp; Services → Credentials → Create credentials → OAuth client ID</b>. Choose <b>Desktop app</b> as the application type. Click Create."
         );
         step(
-            'Copy the <b>Client ID</b> and <b>Client secret</b> from the dialog into the two fields below.'
+            "Copy the <b>Client ID</b> and <b>Client secret</b> from the dialog into the two fields below."
         );
         step(
-            'Scroll down to <b>Manage Calendars</b>, pick <b>Google Calendar</b> from the dropdown and click <b>+</b>, then click <b>Connect</b>.'
+            "Scroll down to <b>Manage Calendars</b>, pick <b>Google Calendar</b> from the dropdown and click <b>+</b>, then click <b>Connect</b>."
         );
 
         const notes = details.createEl("div");
@@ -412,7 +443,9 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             .setDesc("Ends in .apps.googleusercontent.com")
             .addText((t) =>
                 t
-                    .setPlaceholder("123456789-xxxxxxx.apps.googleusercontent.com")
+                    .setPlaceholder(
+                        "123456789-xxxxxxx.apps.googleusercontent.com"
+                    )
                     .setValue(this.plugin.settings.googleClientId)
                     .onChange(async (value) => {
                         this.plugin.settings.googleClientId = value.trim();

@@ -50,6 +50,7 @@ interface ExtraRenderProps {
     timeFormat24h?: boolean;
     slotMinutes?: number;
     snapMinutes?: number;
+    shiftCreateSnapMinutes?: number;
     openContextMenuForEvent?: (
         event: EventApi,
         mouseEvent: MouseEvent
@@ -58,6 +59,14 @@ interface ExtraRenderProps {
     forceNarrow?: boolean;
     selectedEventIds?: Set<string>;
 }
+
+const toDuration = (raw: number | undefined) => {
+    if (!raw || raw <= 0) return undefined;
+    const m = Math.max(1, Math.min(60, Math.floor(raw)));
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    return `${hh}:${mm}:00`;
+};
 
 // Event color groups — warm = productive/focus, cool = rest/calm, neutral = misc.
 export const EVENT_COLOR_GROUPS: {
@@ -164,10 +173,7 @@ export function openColorPalette(opts: {
             document.removeEventListener("mousedown", closer, true);
         }
     };
-    setTimeout(
-        () => document.addEventListener("mousedown", closer, true),
-        0
-    );
+    setTimeout(() => document.addEventListener("mousedown", closer, true), 0);
 }
 
 export function renderCalendar(
@@ -186,6 +192,17 @@ export function renderCalendar(
         toggleTask,
         selectedEventIds,
     } = settings || {};
+    const slotDuration = toDuration(settings?.slotMinutes);
+    // Fall back to slotDuration if snap isn't configured so that existing setups
+    // keep their previous behavior.
+    const snapDuration = toDuration(settings?.snapMinutes) ?? slotDuration;
+    const shiftCreateSnapDuration =
+        toDuration(settings?.shiftCreateSnapMinutes) ?? snapDuration;
+    const durationOptions: Record<string, string> = {};
+    if (slotDuration) durationOptions.slotDuration = slotDuration;
+    if (snapDuration) durationOptions.snapDuration = snapDuration;
+    let finishShiftCreateInteraction: (() => void) | null = null;
+
     const modifyEventCallback =
         modifyEvent &&
         (async ({
@@ -223,6 +240,9 @@ export function renderCalendar(
         nowIndicator: true,
         scrollTimeReset: false,
         dayMaxEvents: true,
+        // Keep tiny events compact so adjacent events that start exactly at the
+        // previous end time are not forced into a split lane by min-height.
+        eventMinHeight: 1,
 
         dayHeaderContent: (arg) => {
             if (arg.view.type.startsWith("timeGrid")) {
@@ -269,24 +289,7 @@ export function renderCalendar(
             },
         },
         firstDay: settings?.firstDay,
-        ...(() => {
-            const toDuration = (raw: number | undefined) => {
-                if (!raw || raw <= 0) return undefined;
-                const m = Math.max(1, Math.min(60, Math.floor(raw)));
-                const hh = String(Math.floor(m / 60)).padStart(2, "0");
-                const mm = String(m % 60).padStart(2, "0");
-                return `${hh}:${mm}:00`;
-            };
-            const slot = toDuration(settings?.slotMinutes);
-            // Fall back to slotDuration if snap isn't configured so that
-            // existing setups keep their previous behavior.
-            const snap =
-                toDuration(settings?.snapMinutes) ?? slot;
-            const out: Record<string, string> = {};
-            if (slot) out.slotDuration = slot;
-            if (snap) out.snapDuration = snap;
-            return out;
-        })(),
+        ...durationOptions,
         ...(settings?.timeFormat24h && {
             eventTimeFormat: {
                 hour: "numeric",
@@ -307,8 +310,17 @@ export function renderCalendar(
         select:
             select &&
             (async (info) => {
-                await select(info.start, info.end, info.allDay, info.view.type);
-                info.view.calendar.unselect();
+                try {
+                    await select(
+                        info.start,
+                        info.end,
+                        info.allDay,
+                        info.view.type
+                    );
+                } finally {
+                    finishShiftCreateInteraction?.();
+                    info.view.calendar.unselect();
+                }
             }),
 
         editable: modifyEvent && true,
@@ -383,6 +395,70 @@ export function renderCalendar(
 
         longPressDelay: 250,
     });
+
+    const cleanupShiftCreateSnap = (() => {
+        if (
+            !snapDuration ||
+            !shiftCreateSnapDuration ||
+            snapDuration === shiftCreateSnapDuration
+        ) {
+            return null;
+        }
+
+        const doc = containerEl.ownerDocument;
+        let isDateSelecting = false;
+        let activeSnapDuration = snapDuration;
+        const setSnapDuration = (duration: string) => {
+            if (duration === activeSnapDuration) return;
+            activeSnapDuration = duration;
+            cal.setOption("snapDuration", duration);
+        };
+        const targetIsEvent = (target: EventTarget | null) =>
+            target instanceof Element && !!target.closest(".fc-event");
+        const handleMouseDown = (event: MouseEvent) => {
+            if (targetIsEvent(event.target)) {
+                isDateSelecting = false;
+                setSnapDuration(snapDuration);
+                return;
+            }
+            isDateSelecting = true;
+            setSnapDuration(
+                event.shiftKey ? shiftCreateSnapDuration : snapDuration
+            );
+        };
+        const handleKeyChange = (event: KeyboardEvent) => {
+            if (!isDateSelecting) return;
+            setSnapDuration(
+                event.getModifierState("Shift")
+                    ? shiftCreateSnapDuration
+                    : snapDuration
+            );
+        };
+        const finishInteraction = () => {
+            if (!isDateSelecting) return;
+            isDateSelecting = false;
+            window.setTimeout(() => setSnapDuration(snapDuration), 0);
+        };
+
+        finishShiftCreateInteraction = finishInteraction;
+        containerEl.addEventListener("mousedown", handleMouseDown, true);
+        doc.addEventListener("keydown", handleKeyChange, true);
+        doc.addEventListener("keyup", handleKeyChange, true);
+        doc.addEventListener("mouseup", finishInteraction, true);
+
+        return () => {
+            containerEl.removeEventListener("mousedown", handleMouseDown, true);
+            doc.removeEventListener("keydown", handleKeyChange, true);
+            doc.removeEventListener("keyup", handleKeyChange, true);
+            doc.removeEventListener("mouseup", finishInteraction, true);
+        };
+    })();
+    const destroyCalendar = cal.destroy.bind(cal);
+    cal.destroy = () => {
+        cleanupShiftCreateSnap?.();
+        destroyCalendar();
+    };
+
     cal.render();
     return cal;
 }

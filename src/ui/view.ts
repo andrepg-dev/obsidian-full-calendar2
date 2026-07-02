@@ -13,7 +13,14 @@ import {
 import { renderOnboarding } from "./onboard";
 import { openFileForEvent } from "./actions";
 import { launchCreateModal, launchEditModal } from "./event_modal";
-import { isTask, toggleTask, unmakeTask } from "src/ui/tasks";
+import {
+    clearGoogleTitleTaskState,
+    googleTitleTaskState,
+    isTask,
+    markGoogleTitleTaskState,
+    toggleTask,
+    unmakeTask,
+} from "src/ui/tasks";
 import { UpdateViewCallback } from "src/core/EventCache";
 
 export const FULL_CALENDAR_VIEW_TYPE = "full-calendar-view";
@@ -275,6 +282,7 @@ export class CalendarView extends ItemView {
             timeFormat24h: this.plugin.settings.timeFormat24h,
             slotMinutes: this.plugin.settings.slotMinutes,
             snapMinutes: this.plugin.settings.snapMinutes,
+            shiftCreateSnapMinutes: this.plugin.settings.shiftCreateSnapMinutes,
             openContextMenuForEvent: async (e, mouseEvent) => {
                 const menu = new Menu();
                 if (!this.plugin.cache) {
@@ -306,9 +314,7 @@ export class CalendarView extends ItemView {
                                 clearSelection();
                                 for (const id of ids) {
                                     try {
-                                        await this.plugin.cache.deleteEvent(
-                                            id
-                                        );
+                                        await this.plugin.cache.deleteEvent(id);
                                     } catch (err: any) {
                                         console.error(err);
                                         new Notice(err.message);
@@ -327,28 +333,154 @@ export class CalendarView extends ItemView {
                 }
 
                 if (this.plugin.cache.isEventEditable(e.id)) {
-                    if (!isTask(event)) {
+                    const eventInfo = this.plugin.cache.getInfoForEditableEvent(
+                        e.id
+                    );
+                    const isGoogleEvent = eventInfo.calendar.type === "google";
+                    const canTask = this.plugin.cache.supportsVaultTaskToggle(
+                        e.id
+                    );
+                    if (canTask && !isTask(event)) {
                         menu.addItem((item) =>
                             item
                                 .setTitle("Turn into task")
                                 .onClick(async () => {
-                                    await this.plugin.cache.processEvent(
-                                        e.id,
-                                        (e) => toggleTask(e, false)
-                                    );
+                                    if (!this.plugin.cache) return;
+                                    try {
+                                        await this.plugin.cache.processEvent(
+                                            e.id,
+                                            (ev) => toggleTask(ev, false)
+                                        );
+                                    } catch (err: any) {
+                                        console.error(err);
+                                        new Notice(
+                                            err?.message ??
+                                                "Could not turn into task."
+                                        );
+                                    }
                                 })
                         );
-                    } else {
+                    } else if (canTask && isTask(event)) {
                         menu.addItem((item) =>
                             item
                                 .setTitle("Remove checkbox")
                                 .onClick(async () => {
-                                    await this.plugin.cache.processEvent(
-                                        e.id,
-                                        unmakeTask
-                                    );
+                                    if (!this.plugin.cache) return;
+                                    try {
+                                        await this.plugin.cache.processEvent(
+                                            e.id,
+                                            unmakeTask
+                                        );
+                                    } catch (err: any) {
+                                        console.error(err);
+                                        new Notice(
+                                            err?.message ??
+                                                "Could not remove checkbox."
+                                        );
+                                    }
                                 })
                         );
+                    }
+                    if (isGoogleEvent) {
+                        const titleTaskState = googleTitleTaskState(
+                            event.title
+                        );
+                        if (titleTaskState !== "completed") {
+                            menu.addItem((item) =>
+                                item
+                                    .setTitle("Mark as Completed")
+                                    .onClick(async () => {
+                                        if (!this.plugin.cache) return;
+                                        try {
+                                            await this.plugin.cache.processEvent(
+                                                e.id,
+                                                (ev) =>
+                                                    markGoogleTitleTaskState(
+                                                        ev,
+                                                        "completed"
+                                                    )
+                                            );
+                                        } catch (err: any) {
+                                            console.error(err);
+                                            new Notice(
+                                                err?.message ??
+                                                    "Could not mark as completed."
+                                            );
+                                        }
+                                    })
+                            );
+                        }
+                        if (titleTaskState !== "inprogress") {
+                            menu.addItem((item) =>
+                                item
+                                    .setTitle("Mark as In Progress")
+                                    .onClick(async () => {
+                                        if (!this.plugin.cache) return;
+                                        try {
+                                            await this.plugin.cache.processEvent(
+                                                e.id,
+                                                (ev) =>
+                                                    markGoogleTitleTaskState(
+                                                        ev,
+                                                        "inprogress"
+                                                    )
+                                            );
+                                        } catch (err: any) {
+                                            console.error(err);
+                                            new Notice(
+                                                err?.message ??
+                                                    "Could not mark as in progress."
+                                            );
+                                        }
+                                    })
+                            );
+                        }
+                        if (titleTaskState !== "uncompleted") {
+                            menu.addItem((item) =>
+                                item
+                                    .setTitle("Mark as Uncompleted")
+                                    .onClick(async () => {
+                                        if (!this.plugin.cache) return;
+                                        try {
+                                            await this.plugin.cache.processEvent(
+                                                e.id,
+                                                (ev) =>
+                                                    markGoogleTitleTaskState(
+                                                        ev,
+                                                        "uncompleted"
+                                                    )
+                                            );
+                                        } catch (err: any) {
+                                            console.error(err);
+                                            new Notice(
+                                                err?.message ??
+                                                    "Could not mark as uncompleted."
+                                            );
+                                        }
+                                    })
+                            );
+                        }
+                        if (titleTaskState !== null) {
+                            menu.addItem((item) =>
+                                item
+                                    .setTitle("Remove status emoji")
+                                    .onClick(async () => {
+                                        if (!this.plugin.cache) return;
+                                        try {
+                                            await this.plugin.cache.processEvent(
+                                                e.id,
+                                                clearGoogleTitleTaskState
+                                            );
+                                        } catch (err: any) {
+                                            console.error(err);
+                                            new Notice(
+                                                err?.message ??
+                                                    "Could not remove status emoji."
+                                            );
+                                        }
+                                    })
+                            );
+                        }
                     }
                     menu.addSeparator();
                     menu.addItem((item) =>
@@ -433,6 +565,28 @@ export class CalendarView extends ItemView {
 
         this.registerDomEvent(this.containerEl, "mouseenter", () => {
             this.plugin.cache.revalidateRemoteCalendars();
+        });
+
+        this.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            const isTextInput =
+                target?.tagName === "INPUT" ||
+                target?.tagName === "TEXTAREA" ||
+                target?.isContentEditable;
+            if (
+                event.key.toLowerCase() !== "z" ||
+                !(event.metaKey || event.ctrlKey) ||
+                event.shiftKey ||
+                event.altKey ||
+                isTextInput ||
+                this.app.workspace.getActiveViewOfType(CalendarView) !== this ||
+                !this.plugin.cache.canUndoDeletedGoogleEvent()
+            ) {
+                return;
+            }
+
+            event.preventDefault();
+            this.plugin.undoDeletedGoogleEvent();
         });
 
         if (this.callback) {

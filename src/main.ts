@@ -92,6 +92,22 @@ export default class FullCalendarPlugin extends Plugin {
     renderCalendar = renderCalendar;
     processFrontmatter = toEventInput;
 
+    async undoDeletedGoogleEvent(): Promise<boolean> {
+        try {
+            const restored = await this.cache.undoLastDeletedGoogleEvent();
+            if (!restored) {
+                new Notice("No deleted Google Calendar event to restore.");
+                return false;
+            }
+            new Notice(`Restored event "${restored.event.title}".`);
+            return true;
+        } catch (e: any) {
+            console.error(e);
+            new Notice(e?.message ?? "Could not restore deleted Google event.");
+            return false;
+        }
+    }
+
     async activateView() {
         const leaves = this.app.workspace
             .getLeavesOfType(FULL_CALENDAR_VIEW_TYPE)
@@ -211,6 +227,20 @@ export default class FullCalendarPlugin extends Plugin {
                 this.app.workspace.getRightLeaf(false).setViewState({
                     type: FULL_CALENDAR_SIDEBAR_VIEW_TYPE,
                 });
+            },
+        });
+
+        this.addCommand({
+            id: "full-calendar-undo-delete-google-event",
+            name: "Undo deleted Google Calendar event",
+            checkCallback: (checking) => {
+                if (!this.cache.canUndoDeletedGoogleEvent()) {
+                    return false;
+                }
+                if (!checking) {
+                    this.undoDeletedGoogleEvent();
+                }
+                return true;
             },
         });
 
