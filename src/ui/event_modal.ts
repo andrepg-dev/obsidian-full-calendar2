@@ -27,6 +27,7 @@ export function launchCreateModal(
         });
     new ReactModal(plugin.app, async (closeModal, registerCloseRequest) =>
         React.createElement(EditEvent, {
+            app: plugin.app,
             initialEvent: partialEvent,
             calendars,
             defaultCalendarIndex: 0,
@@ -73,6 +74,7 @@ export function launchEditModal(plugin: FullCalendarPlugin, eventId: string) {
 
     new ReactModal(plugin.app, async (closeModal, registerCloseRequest) =>
         React.createElement(EditEvent, {
+            app: plugin.app,
             initialEvent: eventToEdit,
             calendars,
             defaultCalendarIndex: calIdx,

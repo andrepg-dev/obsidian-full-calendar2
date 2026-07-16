@@ -1,63 +1,13 @@
 import { DateTime } from "luxon";
-import { Component, MarkdownRenderer } from "obsidian";
+import { App } from "obsidian";
 import * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarInfo, OFCEvent } from "../../types";
 import { EVENT_COLOR_GROUPS, getColorMeta } from "../calendar";
-
-/**
- * Live Obsidian-style markdown preview. Renders `markdown` with Obsidian's
- * own renderer so the description reads exactly like it would in a note.
- * Renders into a detached node and swaps it in on completion so that fast
- * typing never leaves a stale, half-rendered result behind.
- */
-const MarkdownPreview = ({
-    markdown,
-    sourcePath,
-}: {
-    markdown: string;
-    sourcePath: string;
-}) => {
-    const elRef = useRef<HTMLDivElement>(null);
-    const componentRef = useRef<Component | null>(null);
-    if (componentRef.current === null) {
-        componentRef.current = new Component();
-    }
-
-    useEffect(() => {
-        const component = componentRef.current!;
-        component.load();
-        return () => component.unload();
-    }, []);
-
-    useEffect(() => {
-        const el = elRef.current;
-        const component = componentRef.current;
-        if (!el || !component) return;
-        let cancelled = false;
-        const staging = document.createElement("div");
-        MarkdownRenderer.renderMarkdown(
-            markdown,
-            staging,
-            sourcePath,
-            component
-        ).then(() => {
-            if (cancelled || !elRef.current) return;
-            elRef.current.empty();
-            elRef.current.append(...Array.from(staging.childNodes));
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [markdown, sourcePath]);
-
-    return (
-        <div
-            ref={elRef}
-            className="ofc-md-preview markdown-rendered markdown-preview-view"
-        />
-    );
-};
+import {
+    createEmbeddableMarkdownEditor,
+    EmbeddedMarkdownEditor,
+} from "./embeddableMarkdownEditor";
 
 function makeChangeListener<T>(
     setState: React.Dispatch<React.SetStateAction<T>>,
@@ -107,6 +57,7 @@ const DaySelect = ({
 );
 
 interface EditEventProps {
+    app?: App;
     submit: (frontmatter: OFCEvent, calendarIndex: number) => Promise<void>;
     readonly calendars: {
         id: string;
@@ -176,6 +127,7 @@ function addMinutesToTime(start: string, mins: number): string {
 }
 
 export const EditEvent = ({
+    app,
     initialEvent,
     submit,
     open,
@@ -247,6 +199,12 @@ export const EditEvent = ({
     const descriptionRef = useRef<HTMLTextAreaElement>(null);
     const formRef = useRef<HTMLFormElement>(null);
 
+    // Host for Obsidian's embedded markdown editor. When it can't be created
+    // (no app, or unavailable internals) we fall back to a plain textarea.
+    const descHostRef = useRef<HTMLDivElement>(null);
+    const mdEditorRef = useRef<EmbeddedMarkdownEditor | null>(null);
+    const [descFallback, setDescFallback] = useState(!app);
+
     const autoResizeDescription = () => {
         const el = descriptionRef.current;
         if (!el) return;
@@ -263,6 +221,43 @@ export const EditEvent = ({
     useEffect(() => {
         autoResizeDescription();
     }, [description]);
+
+    // Mount Obsidian's own markdown editor into the description host, so the
+    // text is written and rendered (live preview) in a single surface, just
+    // like editing a note. Created once; the editor pushes edits back into
+    // React via onChange. Any failure degrades to the plain textarea.
+    useEffect(() => {
+        if (!app || !descHostRef.current) {
+            setDescFallback(true);
+            return;
+        }
+        let editor: EmbeddedMarkdownEditor | null = null;
+        try {
+            editor = createEmbeddableMarkdownEditor(app, descHostRef.current, {
+                value: initialEvent?.description || "",
+                cls: "ofc-md-editor-cm",
+                placeholder: "Add description… (markdown supported)",
+                onChange: (value) => setDescription(value),
+            });
+            mdEditorRef.current = editor;
+        } catch (e) {
+            console.error(
+                "Full Calendar: falling back to plain description editor",
+                e
+            );
+            setDescFallback(true);
+            return;
+        }
+        return () => {
+            try {
+                editor?.destroy();
+            } catch {
+                /* noop */
+            }
+            mdEditorRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const [colorOpen, setColorOpen] = useState(false);
     const colorRef = useRef<HTMLDivElement>(null);
@@ -498,30 +493,28 @@ export const EditEvent = ({
 
                 <div className="ofc-field ofc-md-field">
                     <span className="ofc-field-label">DESCRIPTION</span>
-                    <textarea
-                        ref={descriptionRef}
-                        className="ofc-input ofc-md-input"
-                        value={description}
-                        placeholder="Add description… (markdown supported)"
-                        rows={1}
-                        style={{
-                            resize: "none",
-                            maxHeight: "200px",
-                            overflowY: "hidden",
-                        }}
-                        onChange={(e) => {
-                            setDescription(e.target.value);
-                            autoResizeDescription();
-                        }}
-                    />
-                    {description.trim() !== "" && (
-                        <div className="ofc-md-preview-wrap">
-                            <span className="ofc-md-preview-badge">PREVIEW</span>
-                            <MarkdownPreview
-                                markdown={description}
-                                sourcePath=""
-                            />
-                        </div>
+                    {descFallback ? (
+                        <textarea
+                            ref={descriptionRef}
+                            className="ofc-input ofc-md-input"
+                            value={description}
+                            placeholder="Add description… (markdown supported)"
+                            rows={1}
+                            style={{
+                                resize: "none",
+                                maxHeight: "200px",
+                                overflowY: "hidden",
+                            }}
+                            onChange={(e) => {
+                                setDescription(e.target.value);
+                                autoResizeDescription();
+                            }}
+                        />
+                    ) : (
+                        <div
+                            ref={descHostRef}
+                            className="ofc-input ofc-md-editor"
+                        />
                     )}
                 </div>
 
