@@ -1,8 +1,63 @@
 import { DateTime } from "luxon";
+import { Component, MarkdownRenderer } from "obsidian";
 import * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarInfo, OFCEvent } from "../../types";
 import { EVENT_COLOR_GROUPS, getColorMeta } from "../calendar";
+
+/**
+ * Live Obsidian-style markdown preview. Renders `markdown` with Obsidian's
+ * own renderer so the description reads exactly like it would in a note.
+ * Renders into a detached node and swaps it in on completion so that fast
+ * typing never leaves a stale, half-rendered result behind.
+ */
+const MarkdownPreview = ({
+    markdown,
+    sourcePath,
+}: {
+    markdown: string;
+    sourcePath: string;
+}) => {
+    const elRef = useRef<HTMLDivElement>(null);
+    const componentRef = useRef<Component | null>(null);
+    if (componentRef.current === null) {
+        componentRef.current = new Component();
+    }
+
+    useEffect(() => {
+        const component = componentRef.current!;
+        component.load();
+        return () => component.unload();
+    }, []);
+
+    useEffect(() => {
+        const el = elRef.current;
+        const component = componentRef.current;
+        if (!el || !component) return;
+        let cancelled = false;
+        const staging = document.createElement("div");
+        MarkdownRenderer.renderMarkdown(
+            markdown,
+            staging,
+            sourcePath,
+            component
+        ).then(() => {
+            if (cancelled || !elRef.current) return;
+            elRef.current.empty();
+            elRef.current.append(...Array.from(staging.childNodes));
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [markdown, sourcePath]);
+
+    return (
+        <div
+            ref={elRef}
+            className="ofc-md-preview markdown-rendered markdown-preview-view"
+        />
+    );
+};
 
 function makeChangeListener<T>(
     setState: React.Dispatch<React.SetStateAction<T>>,
@@ -441,13 +496,13 @@ export const EditEvent = ({
                     />
                 </label>
 
-                <label className="ofc-field">
+                <div className="ofc-field ofc-md-field">
                     <span className="ofc-field-label">DESCRIPTION</span>
                     <textarea
                         ref={descriptionRef}
-                        className="ofc-input"
+                        className="ofc-input ofc-md-input"
                         value={description}
-                        placeholder="Add description..."
+                        placeholder="Add description… (markdown supported)"
                         rows={1}
                         style={{
                             resize: "none",
@@ -459,7 +514,16 @@ export const EditEvent = ({
                             autoResizeDescription();
                         }}
                     />
-                </label>
+                    {description.trim() !== "" && (
+                        <div className="ofc-md-preview-wrap">
+                            <span className="ofc-md-preview-badge">PREVIEW</span>
+                            <MarkdownPreview
+                                markdown={description}
+                                sourcePath=""
+                            />
+                        </div>
+                    )}
+                </div>
 
                 <label className="ofc-field">
                     <span className="ofc-field-label">COLOR</span>
