@@ -83,12 +83,23 @@ export function createEmbeddableMarkdownEditor(
                     props.placeholder
                 );
             }
+            this.updateEmptyClass();
+        }
+
+        // CodeMirror has no native placeholder here; expose emptiness as a
+        // class so CSS can paint the data-placeholder text.
+        updateEmptyClass() {
+            this.editorEl?.classList.toggle(
+                "is-empty",
+                this.getEditorValue() === ""
+            );
         }
 
         // Internal hook fired on every editor transaction.
         onUpdate(update: any, changed: boolean) {
             super.onUpdate?.(update, changed);
             if (changed) {
+                this.updateEmptyClass();
                 this.props.onChange?.(this.getEditorValue());
             }
         }

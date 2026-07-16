@@ -614,6 +614,23 @@
 	--font-text: var(--ofc-d-ui);
 	--font-text-size: 13px;
 }
+/* Placeholder for the embedded editor, painted from data-placeholder while
+   the editor is empty. Mirrors .ofc-input::placeholder. */
+.ofc-md-editor .ofc-md-editor-cm {
+	position: relative;
+}
+.ofc-md-editor .ofc-md-editor-cm.is-empty::before {
+	content: attr(data-placeholder);
+	position: absolute;
+	top: 4px;
+	left: 2px;
+	font-family: var(--ofc-d-ui);
+	font-size: 13px;
+	line-height: 1.35;
+	color: var(--ofc-d-ink-3);
+	pointer-events: none;
+	z-index: 1;
+}
 /* Strip the embedded editor's own chrome so it sits flush inside the box. */
 .ofc-md-editor .cm-editor {
 	background: transparent;

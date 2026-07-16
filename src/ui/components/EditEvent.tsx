@@ -236,7 +236,7 @@ export const EditEvent = ({
             editor = createEmbeddableMarkdownEditor(app, descHostRef.current, {
                 value: initialEvent?.description || "",
                 cls: "ofc-md-editor-cm",
-                placeholder: "Add description… (markdown supported)",
+                placeholder: "Add description...",
                 onChange: (value) => setDescription(value),
             });
             mdEditorRef.current = editor;
@@ -498,7 +498,7 @@ export const EditEvent = ({
                             ref={descriptionRef}
                             className="ofc-input ofc-md-input"
                             value={description}
-                            placeholder="Add description… (markdown supported)"
+                            placeholder="Add description..."
                             rows={1}
                             style={{
                                 resize: "none",
