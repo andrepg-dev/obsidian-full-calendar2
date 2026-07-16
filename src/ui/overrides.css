@@ -607,17 +607,42 @@
 	border-color: var(--ofc-d-accent);
 	box-shadow: inset 0 0 0 1px var(--ofc-d-accent);
 }
+/* Match the title input's typography exactly. The embedded editor inherits
+   the vault's note font (via --font-text/--font-text-size), so override both
+   the variables and the concrete properties. */
+.ofc-dialog .ofc-md-editor {
+	--font-text: var(--ofc-d-ui);
+	--font-text-size: 13px;
+}
 /* Strip the embedded editor's own chrome so it sits flush inside the box. */
 .ofc-md-editor .cm-editor {
 	background: transparent;
+	font-family: var(--ofc-d-ui);
 	font-size: 13px;
-	line-height: 1.5;
+	line-height: 1.35;
 }
 .ofc-md-editor .cm-editor .cm-scroller {
 	padding: 0;
+	font-family: inherit;
+	font-size: inherit;
+	line-height: inherit;
 }
 .ofc-md-editor .cm-editor .cm-content {
 	padding: 4px 2px;
+	font-family: inherit;
+	font-size: inherit;
+	line-height: inherit;
+}
+/* Rendered markdown bits (headings, lists, quotes) inside the editor should
+   stay compact and on the same 13px scale. */
+.ofc-md-editor .cm-content .cm-line {
+	font-size: inherit;
+	line-height: inherit;
+}
+.ofc-md-editor .cm-content .HyperMD-header {
+	font-size: 14px;
+	line-height: 1.35;
+	padding: 2px 0;
 }
 .ofc-md-editor .cm-editor.cm-focused {
 	outline: none;
