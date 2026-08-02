@@ -273,6 +273,109 @@ describe("event cache with google calendar", () => {
         expect(cache.getEventById("restored-id")).toEqual(restored?.event);
         expect(cache.canUndoDeletedGoogleEvent()).toBeFalsy();
     });
+
+    it("runs overlapping writes one at a time", async () => {
+        // Dragging an event twice before the first round trip lands used to
+        // start both writes at once, so whichever request the server answered
+        // last decided the outcome.
+        const flush = () => new Promise((resolve) => setImmediate(resolve));
+        const event = { ...mockEvent(), id: "google-id" };
+        const { cache, calendar } = makeCache([event]);
+        await cache.populate();
+        await flush();
+
+        let concurrent = 0;
+        let maxConcurrent = 0;
+        const pending: Array<() => void> = [];
+        calendar.updateRemoteEvent.mockImplementation(
+            () =>
+                new Promise<void>((resolve) => {
+                    concurrent += 1;
+                    maxConcurrent = Math.max(maxConcurrent, concurrent);
+                    pending.push(() => {
+                        concurrent -= 1;
+                        resolve();
+                    });
+                })
+        );
+
+        const first = cache.updateEventWithId("google-id", {
+            title: "first",
+        } as OFCEvent);
+        const second = cache.updateEventWithId("google-id", {
+            title: "second",
+        } as OFCEvent);
+
+        await flush();
+        expect(pending.length).toBe(1);
+
+        pending[0]();
+        await first;
+        await flush();
+        expect(pending.length).toBe(2);
+
+        pending[1]();
+        await second;
+
+        expect(maxConcurrent).toBe(1);
+        expect(calendar.updateRemoteEvent).toHaveBeenNthCalledWith(
+            1,
+            "google-id",
+            { title: "first" }
+        );
+        expect(calendar.updateRemoteEvent).toHaveBeenNthCalledWith(
+            2,
+            "google-id",
+            { title: "second" }
+        );
+        expect(cache.getEventById("google-id")).toEqual({
+            title: "second",
+            id: "google-id",
+        });
+    });
+
+    it("keeps a write from being undone by a concurrent revalidation", async () => {
+        const flush = () => new Promise((resolve) => setImmediate(resolve));
+        const event = { ...mockEvent(), id: "google-id" };
+        const { cache, calendar } = makeCache([event]);
+        await cache.populate();
+        await flush();
+        // populate() revalidates on its own; only the refresh raced against
+        // the write below is interesting here.
+        calendar.revalidate.mockClear();
+
+        let releaseWrite: () => void = () => undefined;
+        calendar.updateRemoteEvent.mockImplementation(
+            (remoteId: string, updated: OFCEvent) =>
+                new Promise<void>((resolve) => {
+                    releaseWrite = () => {
+                        calendar.events = [{ ...updated, id: remoteId }];
+                        resolve();
+                    };
+                })
+        );
+
+        const write = cache.updateEventWithId("google-id", {
+            title: "moved",
+        } as OFCEvent);
+        await flush();
+
+        // A refresh kicked off mid-write must not read the calendar until the
+        // write has published its result.
+        cache.revalidateRemoteCalendars(true);
+        await flush();
+        expect(calendar.revalidate).not.toHaveBeenCalled();
+
+        releaseWrite();
+        await write;
+        await flush();
+
+        expect(calendar.revalidate).toHaveBeenCalled();
+        expect(cache.getEventById("google-id")).toEqual({
+            title: "moved",
+            id: "google-id",
+        });
+    });
 });
 
 class TestEditable extends EditableCalendar {

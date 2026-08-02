@@ -59,9 +59,7 @@ export const GOOGLE_EVENT_COLORS: { id: string; hex: string }[] = [
 const HEX_TO_COLOR_ID = new Map(
     GOOGLE_EVENT_COLORS.map((c) => [c.hex.toLowerCase(), c.id])
 );
-const COLOR_ID_TO_HEX = new Map(
-    GOOGLE_EVENT_COLORS.map((c) => [c.id, c.hex])
-);
+const COLOR_ID_TO_HEX = new Map(GOOGLE_EVENT_COLORS.map((c) => [c.id, c.hex]));
 
 export function hexToGoogleColorId(hex: string): string | undefined {
     return HEX_TO_COLOR_ID.get(hex.toLowerCase());
@@ -88,6 +86,17 @@ const OFC_TO_GOOGLE_DAY: Record<string, string> = {
     R: "TH",
     F: "FR",
     S: "SA",
+};
+
+/** Luxon weekday numbers (Monday = 1 … Sunday = 7). */
+const OFC_TO_LUXON_WEEKDAY: Record<string, number> = {
+    M: 1,
+    T: 2,
+    W: 3,
+    R: 4,
+    F: 5,
+    S: 6,
+    U: 7,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -216,6 +225,42 @@ export async function listEvents(
     return { events, nextSyncToken };
 }
 
+/**
+ * List the concrete occurrences of one recurring series inside a time window.
+ *
+ * Google names an instance `{masterId}_{originalStartUtc}`, but deriving that
+ * name locally means re-deriving Google's own DST and timezone arithmetic. Ask
+ * Google for it instead — one request, and the answer is authoritative.
+ */
+export async function listInstances(
+    accessToken: string,
+    calendarId: string,
+    masterId: string,
+    opts: { timeMin: string; timeMax: string }
+): Promise<GoogleEvent[]> {
+    type Resp = { items?: GoogleEvent[]; nextPageToken?: string };
+    const events: GoogleEvent[] = [];
+    let pageToken: string | undefined;
+    do {
+        const page = await googleFetch<Resp>(
+            accessToken,
+            "GET",
+            `/calendars/${encodeURIComponent(
+                calendarId
+            )}/events/${encodeURIComponent(masterId)}/instances`,
+            {
+                pageToken,
+                maxResults: "250",
+                timeMin: opts.timeMin,
+                timeMax: opts.timeMax,
+            }
+        );
+        if (page?.items) events.push(...page.items);
+        pageToken = page?.nextPageToken;
+    } while (pageToken);
+    return events;
+}
+
 export async function createGoogleEvent(
     accessToken: string,
     calendarId: string,
@@ -241,9 +286,9 @@ export async function patchGoogleEvent(
     const result = await googleFetch<GoogleEvent>(
         accessToken,
         "PATCH",
-        `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(
-            eventId
-        )}`,
+        `/calendars/${encodeURIComponent(
+            calendarId
+        )}/events/${encodeURIComponent(eventId)}`,
         undefined,
         body
     );
@@ -259,9 +304,9 @@ export async function deleteGoogleEvent(
     await googleFetch<null>(
         accessToken,
         "DELETE",
-        `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(
-            eventId
-        )}`
+        `/calendars/${encodeURIComponent(
+            calendarId
+        )}/events/${encodeURIComponent(eventId)}`
     );
 }
 
@@ -291,7 +336,10 @@ function parseGoogleDateTime(
     return null;
 }
 
-function inclusiveAllDayEnd(start: string, exclusiveEnd: string): string | null {
+function inclusiveAllDayEnd(
+    start: string,
+    exclusiveEnd: string
+): string | null {
     const s = DateTime.fromISO(start, { zone: "utc" });
     const e = DateTime.fromISO(exclusiveEnd, { zone: "utc" });
     if (!s.isValid || !e.isValid) return null;
@@ -380,8 +428,8 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
     const endDate = allDay
         ? inclusiveAllDayEnd(start.date, end.date)
         : end.time !== null && end.date !== start.date
-          ? end.date
-          : null;
+        ? end.date
+        : null;
 
     const candidate = {
         id,
@@ -397,45 +445,47 @@ export function googleToOFC(g: GoogleEvent): OFCEvent | null {
 }
 
 /**
- * Apply cancelled-instance exceptions to their master events as EXDATEs.
- * Modified instances (recurringEventId set, status=confirmed) are dropped —
- * v1 limitation; users see the master at the original time/date.
+ * Reconcile recurrence exceptions with their master events.
+ *
+ * Google models both a cancelled occurrence and an edited one as a separate
+ * event carrying `recurringEventId` plus the `originalStartTime` it was carved
+ * out of. Either way the master must stop expanding onto that slot, so the
+ * original date becomes an EXDATE. A cancelled instance then disappears; an
+ * edited one survives as a standalone event at its new time.
  */
 export function foldRecurrenceExceptions(events: GoogleEvent[]): GoogleEvent[] {
-    const masters = new Map<string, GoogleEvent>();
-    for (const e of events) {
-        if (!e.recurringEventId) masters.set(e.id, e);
-    }
     const exdatesByMaster: Map<string, string[]> = new Map();
+    const detached: GoogleEvent[] = [];
     for (const e of events) {
-        if (
-            e.recurringEventId &&
-            e.status === "cancelled" &&
-            e.originalStartTime
-        ) {
-            const orig = parseGoogleDateTime(e.originalStartTime);
-            if (!orig) continue;
-            const list = exdatesByMaster.get(e.recurringEventId) || [];
-            const compact = orig.date.replace(/-/g, "");
-            list.push(compact);
-            exdatesByMaster.set(e.recurringEventId, list);
+        if (!e.recurringEventId || !e.originalStartTime) continue;
+        const orig = parseGoogleDateTime(e.originalStartTime);
+        if (!orig) continue;
+        const list = exdatesByMaster.get(e.recurringEventId) || [];
+        list.push(orig.date.replace(/-/g, ""));
+        exdatesByMaster.set(e.recurringEventId, list);
+        // A cancelled instance is fully described by the EXDATE above. A
+        // confirmed one still has to be drawn, at whatever time it was moved to.
+        if (e.status !== "cancelled") {
+            detached.push({ ...e, recurrence: undefined });
         }
     }
     const out: GoogleEvent[] = [];
     for (const e of events) {
         if (e.recurringEventId) continue;
-        if (exdatesByMaster.has(e.id)) {
-            const exs = exdatesByMaster.get(e.id) || [];
-            const recurrence = [
-                ...(e.recurrence || []),
-                `EXDATE:${exs.join(",")}`,
-            ];
-            out.push({ ...e, recurrence });
+        const exs = exdatesByMaster.get(e.id);
+        if (exs) {
+            out.push({
+                ...e,
+                recurrence: [
+                    ...(e.recurrence || []),
+                    `EXDATE:${exs.join(",")}`,
+                ],
+            });
         } else {
             out.push(e);
         }
     }
-    return out;
+    return [...out, ...detached];
 }
 
 /* ----- OFC → Google -------------------------------------------------------- */
@@ -453,16 +503,53 @@ function toGoogleDateTime(
     return { dateTime: dt.toISO({ suppressMilliseconds: true }), timeZone };
 }
 
-function ofcRecurringToRRule(daysOfWeek: string[], endRecur?: string): string {
+/**
+ * Move the series anchor forward to the first selected weekday. RFC 5545 counts
+ * DTSTART itself as an occurrence, so anchoring a Tue/Thu series on a Monday
+ * would put a stray event on that Monday.
+ */
+function alignStartToDays(startDate: string, daysOfWeek: string[]): string {
+    const wanted = new Set(
+        daysOfWeek
+            .map((d) => OFC_TO_LUXON_WEEKDAY[d])
+            .filter((n): n is number => n !== undefined)
+    );
+    let dt = DateTime.fromISO(startDate);
+    if (wanted.size === 0 || !dt.isValid) return startDate;
+    for (let i = 0; i < 7; i++) {
+        if (wanted.has(dt.weekday)) return dt.toISODate();
+        dt = dt.plus({ days: 1 });
+    }
+    return startDate;
+}
+
+function ofcRecurringToRRule(
+    daysOfWeek: string[],
+    endRecur: string | undefined,
+    allDay: boolean,
+    timeZone: string
+): string {
     const byDay = daysOfWeek
         .map((d) => OFC_TO_GOOGLE_DAY[d])
         .filter((d): d is string => !!d);
     const parts = ["FREQ=WEEKLY"];
     if (byDay.length > 0) parts.push(`BYDAY=${byDay.join(",")}`);
     if (endRecur) {
-        const until = DateTime.fromISO(endRecur, { zone: "utc" });
+        // RFC 5545: UNTIL must use the same value type as DTSTART, and must be
+        // UTC when DTSTART carries a time. The last day is inclusive, so run to
+        // the end of it in the event's own zone before converting.
+        const until = DateTime.fromISO(endRecur, {
+            zone: allDay ? "utc" : timeZone,
+        });
         if (until.isValid) {
-            parts.push(`UNTIL=${until.toFormat("yyyyMMdd")}`);
+            parts.push(
+                allDay
+                    ? `UNTIL=${until.toFormat("yyyyMMdd")}`
+                    : `UNTIL=${until
+                          .endOf("day")
+                          .toUTC()
+                          .toFormat("yyyyMMdd'T'HHmmss'Z'")}`
+            );
         }
     }
     return `RRULE:${parts.join(";")}`;
@@ -489,10 +576,7 @@ function buildReminders(
     override?: GoogleReminderOverride
 ): Record<string, unknown> | undefined {
     if (!override || !override.enabled) return undefined;
-    const minutes = Math.max(
-        0,
-        Math.min(40320, Math.floor(override.minutes))
-    );
+    const minutes = Math.max(0, Math.min(40320, Math.floor(override.minutes)));
     return {
         useDefault: false,
         overrides: [{ method: "popup", minutes }],
@@ -524,6 +608,10 @@ export function ofcToGoogle(
     if (reminders) body.reminders = reminders;
 
     if (event.type === "single") {
+        // Explicit null, not omission: a PATCH that leaves `recurrence` out
+        // keeps whatever schedule the event already had on Google, so turning
+        // REPEAT off would silently do nothing.
+        body.recurrence = null;
         if (event.allDay) {
             const startDate = event.date;
             const endDateInclusive = event.endDate || event.date;
@@ -551,7 +639,10 @@ export function ofcToGoogle(
     }
 
     if (event.type === "recurring") {
-        const startDate = event.startRecur || DateTime.local().toISODate();
+        const startDate = alignStartToDays(
+            event.startRecur || DateTime.local().toISODate(),
+            event.daysOfWeek
+        );
         if (event.allDay) {
             body.start = toGoogleAllDay(startDate);
             body.end = toGoogleAllDay(
@@ -560,11 +651,7 @@ export function ofcToGoogle(
                     .toISODate()
             );
         } else {
-            body.start = toGoogleDateTime(
-                startDate,
-                event.startTime,
-                timeZone
-            );
+            body.start = toGoogleDateTime(startDate, event.startTime, timeZone);
             body.end = toGoogleDateTime(
                 startDate,
                 event.endTime || event.startTime,
@@ -572,7 +659,12 @@ export function ofcToGoogle(
             );
         }
         body.recurrence = [
-            ofcRecurringToRRule(event.daysOfWeek, event.endRecur),
+            ofcRecurringToRRule(
+                event.daysOfWeek,
+                event.endRecur,
+                event.allDay,
+                timeZone
+            ),
         ];
         return body;
     }

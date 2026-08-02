@@ -2,7 +2,6 @@ import { EventApi, EventInput } from "@fullcalendar/core";
 import { OFCEvent } from "../types";
 
 import { DateTime, Duration } from "luxon";
-import { rrulestr } from "rrule";
 
 /*
  * Functions for converting between the types used by the FullCalendar view plugin and types used internally by Obsidian Full Calendar.
@@ -80,6 +79,42 @@ const combineDateTimeStrings = (date: string, time: string): string | null => {
 };
 
 const DAYS = "UMTWRFS";
+
+/*
+ * The rrule library expands BYDAY/BYMONTHDAY against the *UTC* fields of its
+ * dtstart, and FullCalendar's DateMarkers are UTC-encoded wall clock times.
+ * So the whole rule has to stay in floating wall-clock time: hand rrule a real
+ * instant and an evening event west of Greenwich rolls into the next UTC day,
+ * pushing every occurrence's weekday forward by one.
+ *
+ * Keeping DTSTART/UNTIL free of a `Z` suffix also keeps FullCalendar on its
+ * "no timezone specified" expansion path, where rrule's output already lines up
+ * with DateMarkers and needs no further conversion.
+ */
+
+const floatingStamp = (dt: DateTime): string =>
+    dt.toFormat("yyyyMMdd'T'HHmmss");
+
+const UTC_STAMP = /\d{8}T\d{6}Z/g;
+
+/** Rewrite any UTC timestamp in a rule line (UNTIL, EXDATE, ...) as local wall clock. */
+const floatUtcStamps = (line: string): string =>
+    line.replace(UTC_STAMP, (stamp) => {
+        const parsed = DateTime.fromFormat(stamp, "yyyyMMdd'T'HHmmss'Z'", {
+            zone: "utc",
+        });
+        return parsed.isValid ? floatingStamp(parsed.toLocal()) : stamp;
+    });
+
+const normalizeRRuleLines = (rrule: string): string[] =>
+    rrule
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !/^DTSTART/i.test(l))
+        .map((l) =>
+            /^(RRULE|EXRULE|RDATE|EXDATE)[;:]/i.test(l) ? l : `RRULE:${l}`
+        )
+        .map(floatUtcStamps);
 
 export function dateEndpointsToFrontmatter(
     start: Date,
@@ -159,30 +194,38 @@ export function toEventInput(
                 return DateTime.fromISO(dtstartStr);
             }
         })();
-        if (dtstart === null) {
+        if (dtstart === null || !dtstart.isValid) {
             return null;
         }
         // NOTE: how exdates are handled does not support events which recur more than once per day.
-        const exdate = frontmatter.skipDates
-            .map((d) => {
-                // Can't do date arithmetic because timezone might change for different exdates due to DST.
-                // RRule only has one dtstart that doesn't know about DST/timezone changes.
-                // Therefore, just concatenate the date for this exdate and the start time for the event together.
-                const date = DateTime.fromISO(d).toISODate();
-                const time = dtstart.toJSDate().toISOString().split("T")[1];
-
-                return `${date}T${time}`;
-            })
-            .flatMap((d) => (d ? d : []));
+        const exdate = frontmatter.skipDates.flatMap((d) => {
+            // Can't do date arithmetic because timezone might change for different exdates due to DST.
+            // RRule only has one dtstart that doesn't know about DST/timezone changes.
+            // Therefore, just pair the date for this exdate with the start time for the event.
+            const date = DateTime.fromISO(d);
+            if (!date.isValid) {
+                return [];
+            }
+            return [
+                floatingStamp(
+                    date.set({
+                        hour: dtstart.hour,
+                        minute: dtstart.minute,
+                        second: dtstart.second,
+                    })
+                ),
+            ];
+        });
 
         event = {
             id,
             title: frontmatter.title,
             allDay: frontmatter.allDay,
             ...colorOverride,
-            rrule: rrulestr(frontmatter.rrule, {
-                dtstart: dtstart.toJSDate(),
-            }).toString(),
+            rrule: [
+                `DTSTART:${floatingStamp(dtstart)}`,
+                ...normalizeRRuleLines(frontmatter.rrule),
+            ].join("\n"),
             exdate,
             extendedProps: { isTask: false, ...baseExtendedProps },
         };
@@ -257,12 +300,23 @@ export function toEventInput(
     return event;
 }
 
-export function fromEventApi(event: EventApi): OFCEvent {
-    const isRecurring: boolean = event.extendedProps.daysOfWeek !== undefined;
+/**
+ * @param asSingleInstance Read the event as the one occurrence FullCalendar is
+ *        showing rather than as the series it belongs to. Used when a drag
+ *        should detach that occurrence instead of moving every one of them.
+ */
+export function fromEventApi(
+    event: EventApi,
+    asSingleInstance = false
+): OFCEvent {
+    const isRecurring: boolean =
+        !asSingleInstance && event.extendedProps.daysOfWeek !== undefined;
     const startDate = getDate(event.start as Date);
     // FullCalendar stores all-day `end` as exclusive; normalize to inclusive endDate.
     const endDate = event.allDay
-        ? DateTime.fromJSDate(event.end as Date).minus({ days: 1 }).toISODate()
+        ? DateTime.fromJSDate(event.end as Date)
+              .minus({ days: 1 })
+              .toISODate()
         : getDate(event.end as Date);
     const color: string | undefined = event.extendedProps.color;
     return {

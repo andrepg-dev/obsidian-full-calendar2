@@ -513,6 +513,39 @@
 	color: var(--ofc-d-sand);
 }
 
+/* ── Occurrence vs. series scope ────────────────────────── */
+.ofc-scoperow {
+	display: flex;
+	margin: 14px 18px 0;
+	border: 1px solid var(--ofc-d-hair);
+	border-radius: 1px;
+	overflow: hidden;
+}
+.ofc-scope-btn {
+	flex: 1;
+	border: 0;
+	border-radius: 0;
+	background: #fff;
+	color: var(--ofc-d-ink-2);
+	padding: 6px 10px;
+	font-family: var(--ofc-d-mono);
+	font-size: 10px;
+	font-weight: 500;
+	letter-spacing: 0.5px;
+	cursor: pointer;
+	transition: color 120ms ease, background-color 120ms ease;
+}
+.ofc-scope-btn + .ofc-scope-btn {
+	border-left: 1px solid var(--ofc-d-hair);
+}
+.ofc-scope-btn:hover {
+	color: var(--ofc-d-ink);
+}
+.ofc-scope-btn.is-active {
+	background: var(--ofc-d-accent-bg);
+	color: var(--ofc-d-accent);
+}
+
 /* ── Body + fields ──────────────────────────────────────── */
 .ofc-dialog-body {
 	padding: 16px 18px;
@@ -826,6 +859,27 @@
 	border-color: var(--ofc-d-accent);
 	background: var(--ofc-d-accent-bg);
 	color: var(--ofc-d-accent);
+}
+
+/* ── Non-weekly repeat rule (read-only passthrough) ──────── */
+.ofc-custom-rule {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.ofc-custom-rule-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	border: 1px solid var(--ofc-d-hair);
+	background: var(--ofc-d-accent-bg);
+	color: var(--ofc-d-ink-2);
+	font-family: var(--ofc-d-mono);
+	font-size: 10px;
+	letter-spacing: 0.3px;
+	padding: 6px 10px;
+	border-radius: 1px;
 }
 
 /* ── Checkbox row (task completion) ──────────────────────── */

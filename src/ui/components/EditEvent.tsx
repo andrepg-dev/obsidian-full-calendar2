@@ -26,6 +26,100 @@ const DAY_MAP: Record<string, string> = {
     S: "Sat",
 };
 
+const RRULE_DAY_TO_OFC: Record<string, string> = {
+    SU: "U",
+    MO: "M",
+    TU: "T",
+    WE: "W",
+    TH: "R",
+    FR: "F",
+    SA: "S",
+};
+
+/** Rule properties the weekly day-picker below can represent losslessly. */
+const WEEKLY_RULE_KEYS = new Set([
+    "FREQ",
+    "BYDAY",
+    "UNTIL",
+    "WKST",
+    "INTERVAL",
+]);
+
+type Recurrence = {
+    daysOfWeek: string[];
+    endRecur: string;
+    /**
+     * Set when the schedule is richer than "every week on these days" — a
+     * monthly rule, an every-other-week rule, a COUNT limit. Kept verbatim so
+     * that editing the title of such an event doesn't flatten its schedule.
+     */
+    custom?: { rrule: string; skipDates: string[]; summary: string };
+};
+
+function parseRuleProps(rrule: string): Record<string, string> | null {
+    const line = rrule
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => /^(RRULE:)?FREQ=/i.test(l));
+    if (!line) return null;
+    const props: Record<string, string> = {};
+    for (const part of line.replace(/^RRULE:/i, "").split(";")) {
+        const [key, value] = part.split("=");
+        if (key && value) props[key.toUpperCase()] = value;
+    }
+    return props;
+}
+
+function untilToDate(until: string): string {
+    const utc = DateTime.fromFormat(until, "yyyyMMdd'T'HHmmss'Z'", {
+        zone: "utc",
+    });
+    if (utc.isValid) return utc.toLocal().toISODate();
+    const dateOnly = DateTime.fromFormat(until, "yyyyMMdd");
+    return dateOnly.isValid ? dateOnly.toISODate() : "";
+}
+
+function parseRecurrence(event?: Partial<OFCEvent>): Recurrence | null {
+    if (!event) return null;
+    if (event.type === "recurring") {
+        return {
+            daysOfWeek: event.daysOfWeek || [],
+            endRecur: event.endRecur || "",
+        };
+    }
+    if (event.type !== "rrule" || !event.rrule) return null;
+
+    const rrule = event.rrule;
+    const props = parseRuleProps(rrule);
+    const byDay = props?.BYDAY ? props.BYDAY.toUpperCase().split(",") : [];
+    const isWeekly =
+        !!props &&
+        props.FREQ === "WEEKLY" &&
+        (props.INTERVAL === undefined || props.INTERVAL === "1") &&
+        Object.keys(props).every((k) => WEEKLY_RULE_KEYS.has(k)) &&
+        byDay.every((d) => RRULE_DAY_TO_OFC[d] !== undefined);
+
+    if (!isWeekly) {
+        const summary = (props ? Object.entries(props) : [])
+            .map(([k, v]) => `${k}=${v}`)
+            .join(";");
+        return {
+            daysOfWeek: [],
+            endRecur: "",
+            custom: {
+                rrule,
+                skipDates: event.skipDates || [],
+                summary: summary || rrule,
+            },
+        };
+    }
+
+    return {
+        daysOfWeek: byDay.map((d) => RRULE_DAY_TO_OFC[d]),
+        endRecur: props.UNTIL ? untilToDate(props.UNTIL) : "",
+    };
+}
+
 const DaySelect = ({
     value: days,
     onChange,
@@ -40,9 +134,7 @@ const DaySelect = ({
                 <button
                     key={code}
                     type="button"
-                    className={
-                        "ofc-daychip" + (isSelected ? " is-active" : "")
-                    }
+                    className={"ofc-daychip" + (isSelected ? " is-active" : "")}
                     onClick={() =>
                         isSelected
                             ? onChange(days.filter((c) => c !== code))
@@ -56,9 +148,19 @@ const DaySelect = ({
     </div>
 );
 
+/**
+ * Which occurrences of a repeating event an edit applies to. Editing the one
+ * that was clicked is the default; the whole series is opt-in.
+ */
+export type EditScope = "single" | "series";
+
 interface EditEventProps {
     app?: App;
-    submit: (frontmatter: OFCEvent, calendarIndex: number) => Promise<void>;
+    submit: (
+        frontmatter: OFCEvent,
+        calendarIndex: number,
+        scope: EditScope
+    ) => Promise<void>;
     readonly calendars: {
         id: string;
         name: string;
@@ -66,8 +168,13 @@ interface EditEventProps {
     }[];
     defaultCalendarIndex: number;
     initialEvent?: Partial<OFCEvent>;
+    /**
+     * Set when a single occurrence of a repeating event was opened and this
+     * calendar can detach it from the series. `date` is the occurrence clicked.
+     */
+    instance?: { date: string };
     open?: () => Promise<void>;
-    deleteEvent?: () => Promise<void>;
+    deleteEvent?: (scope: EditScope) => Promise<void>;
     cancel?: () => void;
     registerCloseRequest?: (handler?: () => void) => void;
 }
@@ -129,6 +236,7 @@ function addMinutesToTime(start: string, mins: number): string {
 export const EditEvent = ({
     app,
     initialEvent,
+    instance,
     submit,
     open,
     deleteEvent,
@@ -138,6 +246,13 @@ export const EditEvent = ({
     defaultCalendarIndex,
 }: EditEventProps) => {
     const isEdit = Boolean(open);
+
+    // Google (and ICS) hand back every repeating event as an `rrule`, so the
+    // repeat controls have to read that shape too — not just our own
+    // `recurring` one — or opening such an event would show it as a one-off and
+    // saving would strip its schedule.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const recurrence = useMemo(() => parseRecurrence(initialEvent), []);
 
     const [date, setDate] = useState(
         initialEvent
@@ -168,15 +283,19 @@ export const EditEvent = ({
     const [startTime, setStartTime] = useState(initialStartTime);
     const [endTime, setEndTime] = useState(initialEndTime);
     const [title, setTitle] = useState(initialEvent?.title || "");
-    const [description, setDescription] = useState(initialEvent?.description || "");
-    const [isRecurring, setIsRecurring] = useState(
-        initialEvent?.type === "recurring" || false
+    const [description, setDescription] = useState(
+        initialEvent?.description || ""
     );
-    const [endRecur, setEndRecur] = useState("");
+    const [isRecurring, setIsRecurring] = useState(recurrence !== null);
+    const [endRecur, setEndRecur] = useState(recurrence?.endRecur || "");
     const [daysOfWeek, setDaysOfWeek] = useState<string[]>(
-        (initialEvent?.type === "recurring" ? initialEvent.daysOfWeek : []) ||
-            []
+        recurrence?.daysOfWeek || []
     );
+    const [customRule, setCustomRule] = useState(recurrence?.custom);
+    const [scope, setScope] = useState<EditScope>(
+        instance ? "single" : "series"
+    );
+    const [instanceDate, setInstanceDate] = useState(instance?.date || "");
     const [allDay, setAllDay] = useState(initialEvent?.allDay || false);
     const [calendarIndex, setCalendarIndex] = useState(defaultCalendarIndex);
     const [complete, setComplete] = useState<string | false | null | undefined>(
@@ -191,9 +310,7 @@ export const EditEvent = ({
             initialEvent.completed !== undefined &&
             initialEvent.completed !== null
     );
-    const [color, setColor] = useState<string | undefined>(
-        initialEvent?.color
-    );
+    const [color, setColor] = useState<string | undefined>(initialEvent?.color);
 
     const titleRef = useRef<HTMLInputElement>(null);
     const descriptionRef = useRef<HTMLTextAreaElement>(null);
@@ -297,6 +414,11 @@ export const EditEvent = ({
         setDurationDraft(null);
     };
 
+    // A single occurrence detached from its series is a one-off event, so the
+    // repeat controls step aside while that scope is selected.
+    const editingInstance = Boolean(instance) && scope === "single";
+    const showRecurrence = isRecurring && !editingInstance;
+
     const buildEvent = (): OFCEvent =>
         ({
             ...{ title },
@@ -305,30 +427,64 @@ export const EditEvent = ({
             ...(allDay
                 ? { allDay: true }
                 : { allDay: false, startTime: startTime || "", endTime }),
-            ...(isRecurring
+            ...(editingInstance
                 ? {
-                      type: "recurring",
-                      daysOfWeek: daysOfWeek as (
-                          | "U"
-                          | "M"
-                          | "T"
-                          | "W"
-                          | "R"
-                          | "F"
-                          | "S"
-                      )[],
-                      startRecur: date || undefined,
-                      endRecur: endRecur || undefined,
+                      type: "single",
+                      date: instanceDate,
+                      endDate: null,
+                      completed: null,
                   }
+                : isRecurring
+                ? customRule
+                    ? {
+                          type: "rrule",
+                          startDate: date || "",
+                          rrule: customRule.rrule,
+                          skipDates: customRule.skipDates,
+                      }
+                    : {
+                          type: "recurring",
+                          daysOfWeek: daysOfWeek as (
+                              | "U"
+                              | "M"
+                              | "T"
+                              | "W"
+                              | "R"
+                              | "F"
+                              | "S"
+                          )[],
+                          startRecur: date || undefined,
+                          endRecur: endRecur || undefined,
+                      }
                 : {
                       type: "single",
                       date: date || "",
                       endDate: endDate || null,
                       completed: isTask ? complete : null,
                   }),
-        }) as OFCEvent;
+        } as OFCEvent);
 
-    const formSnapshot = JSON.stringify({ event: buildEvent(), calendarIndex });
+    // Snapshot the raw fields rather than `buildEvent()`: switching scope
+    // reshapes the built event without the user having typed anything, and that
+    // should not count as an unsaved change.
+    const formSnapshot = JSON.stringify({
+        title,
+        description,
+        color,
+        allDay,
+        startTime,
+        endTime,
+        date,
+        endDate,
+        instanceDate,
+        isRecurring,
+        endRecur,
+        daysOfWeek,
+        customRule,
+        isTask,
+        complete,
+        calendarIndex,
+    });
     const initialFormSnapshot = useRef(formSnapshot);
     const isDirty = initialFormSnapshot.current !== formSnapshot;
     const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -363,7 +519,7 @@ export const EditEvent = ({
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         setShowCloseConfirm(false);
-        await submit(buildEvent(), calendarIndex);
+        await submit(buildEvent(), calendarIndex, scope);
     };
 
     // Cmd/Ctrl+Enter closes the modal immediately and fires the save in the
@@ -376,7 +532,7 @@ export const EditEvent = ({
         if (durationDraft !== null) commitDuration();
         const data = buildEvent();
         if (cancel) cancel();
-        void submit(data, calendarIndex);
+        void submit(data, calendarIndex, scope);
     };
 
     const onKey = (e: React.KeyboardEvent<HTMLFormElement>) => {
@@ -465,17 +621,53 @@ export const EditEvent = ({
                 <span className="ofc-dialog-hint">esc to close</span>
             </header>
 
-            <div className="ofc-pillrow">
-                <button
-                    type="button"
-                    className={
-                        "ofc-pill" + (isRecurring ? " is-active" : "")
-                    }
-                    onClick={() => setIsRecurring((v) => !v)}
+            {instance && (
+                <div
+                    className="ofc-scoperow"
+                    role="group"
+                    aria-label="Apply to"
                 >
-                    ▪ REPEAT
-                </button>
-            </div>
+                    <button
+                        type="button"
+                        className={
+                            "ofc-scope-btn" +
+                            (scope === "single" ? " is-active" : "")
+                        }
+                        aria-pressed={scope === "single"}
+                        onClick={() => setScope("single")}
+                    >
+                        THIS EVENT
+                    </button>
+                    <button
+                        type="button"
+                        className={
+                            "ofc-scope-btn" +
+                            (scope === "series" ? " is-active" : "")
+                        }
+                        aria-pressed={scope === "series"}
+                        onClick={() => setScope("series")}
+                    >
+                        ALL EVENTS
+                    </button>
+                </div>
+            )}
+
+            {!editingInstance && (
+                <div className="ofc-pillrow">
+                    <button
+                        type="button"
+                        className={
+                            "ofc-pill" + (isRecurring ? " is-active" : "")
+                        }
+                        onClick={() => {
+                            if (isRecurring) setCustomRule(undefined);
+                            setIsRecurring((v) => !v);
+                        }}
+                    >
+                        ▪ REPEAT
+                    </button>
+                </div>
+            )}
 
             <div className="ofc-dialog-body">
                 <label className="ofc-field">
@@ -536,9 +728,7 @@ export const EditEvent = ({
                             <span
                                 className={
                                     "ofc-dialog-swatch" +
-                                    (!color
-                                        ? " ofc-dialog-swatch-default"
-                                        : "")
+                                    (!color ? " ofc-dialog-swatch-default" : "")
                                 }
                                 style={
                                     color ? { background: color } : undefined
@@ -626,39 +816,47 @@ export const EditEvent = ({
                 <div className="ofc-grid-2">
                     <label className="ofc-field">
                         <span className="ofc-field-label">
-                            {isRecurring ? "STARTS" : "DATE"}
+                            {showRecurrence ? "STARTS" : "DATE"}
                         </span>
                         <input
                             type="date"
                             className="ofc-input ofc-input-mono"
-                            value={date || ""}
-                            required={!isRecurring || !!date}
-                            onChange={makeChangeListener(
-                                setDate,
-                                (x) => x as any
-                            )}
-                        />
-                    </label>
-                    <label className="ofc-field">
-                        <span className="ofc-field-label">
-                            {isRecurring ? "ENDS (OPTIONAL)" : "END DATE"}
-                        </span>
-                        <input
-                            type="date"
-                            className="ofc-input ofc-input-mono"
-                            value={
-                                (isRecurring ? endRecur : endDate || "") || ""
-                            }
-                            onChange={
-                                isRecurring
-                                    ? makeChangeListener(setEndRecur, (x) => x)
-                                    : makeChangeListener(
-                                          setEndDate,
-                                          (x) => x as any
-                                      )
+                            value={editingInstance ? instanceDate : date || ""}
+                            required={editingInstance || !isRecurring || !!date}
+                            onChange={(e) =>
+                                editingInstance
+                                    ? setInstanceDate(e.target.value)
+                                    : setDate(e.target.value)
                             }
                         />
                     </label>
+                    {!editingInstance && (
+                        <label className="ofc-field">
+                            <span className="ofc-field-label">
+                                {isRecurring ? "ENDS (OPTIONAL)" : "END DATE"}
+                            </span>
+                            <input
+                                type="date"
+                                className="ofc-input ofc-input-mono"
+                                value={
+                                    (isRecurring ? endRecur : endDate || "") ||
+                                    ""
+                                }
+                                disabled={isRecurring && !!customRule}
+                                onChange={
+                                    isRecurring
+                                        ? makeChangeListener(
+                                              setEndRecur,
+                                              (x) => x
+                                          )
+                                        : makeChangeListener(
+                                              setEndDate,
+                                              (x) => x as any
+                                          )
+                                }
+                            />
+                        </label>
+                    )}
                 </div>
 
                 {!allDay && (
@@ -716,15 +914,32 @@ export const EditEvent = ({
                     </div>
                 )}
 
-                {isRecurring && (
-                    <div className="ofc-field">
-                        <span className="ofc-field-label">REPEAT ON</span>
-                        <DaySelect
-                            value={daysOfWeek}
-                            onChange={setDaysOfWeek}
-                        />
-                    </div>
-                )}
+                {showRecurrence &&
+                    (customRule ? (
+                        <div className="ofc-field">
+                            <span className="ofc-field-label">REPEATS</span>
+                            <div className="ofc-custom-rule">
+                                <code className="ofc-custom-rule-text">
+                                    {customRule.summary}
+                                </code>
+                                <button
+                                    type="button"
+                                    className="ofc-btn ofc-btn-ghost"
+                                    onClick={() => setCustomRule(undefined)}
+                                >
+                                    Replace with weekly
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="ofc-field">
+                            <span className="ofc-field-label">REPEAT ON</span>
+                            <DaySelect
+                                value={daysOfWeek}
+                                onChange={setDaysOfWeek}
+                            />
+                        </div>
+                    ))}
 
                 {editableCalendars.length > 1 && (
                     <label className="ofc-field">
@@ -752,8 +967,8 @@ export const EditEvent = ({
                                     {cal.type === "local"
                                         ? cal.name
                                         : cal.type === "google"
-                                          ? cal.name
-                                          : "Daily Note"}
+                                        ? cal.name
+                                        : "Daily Note"}
                                 </option>
                             ))}
                         </select>
@@ -787,7 +1002,7 @@ export const EditEvent = ({
                         <button
                             type="button"
                             className="ofc-btn ofc-btn-danger"
-                            onClick={deleteEvent}
+                            onClick={() => deleteEvent(scope)}
                         >
                             Delete
                         </button>

@@ -16,24 +16,19 @@ import interactionPlugin from "@fullcalendar/interaction";
 import googleCalendarPlugin from "@fullcalendar/google-calendar";
 import iCalendarPlugin from "@fullcalendar/icalendar";
 
-// There is an issue with FullCalendar RRule support around DST boundaries which is fixed by this monkeypatch:
-// https://github.com/fullcalendar/fullcalendar/issues/5273#issuecomment-1360459342
-rrulePlugin.recurringTypes[0].expand = function (errd, fr, de) {
-    const hours = errd.rruleSet._dtstart.getHours();
-    return errd.rruleSet
-        .between(de.toDate(fr.start), de.toDate(fr.end), true)
-        .map((d: Date) => {
-            return new Date(
-                Date.UTC(
-                    d.getFullYear(),
-                    d.getMonth(),
-                    d.getDate(),
-                    hours,
-                    d.getMinutes()
-                )
-            );
-        });
-};
+/*
+ * NOTE: this file used to monkeypatch `rrulePlugin.recurringTypes[0].expand`
+ * to work around https://github.com/fullcalendar/fullcalendar/issues/5273 —
+ * DST drift when the rule was anchored to a real instant. That patch read the
+ * expansion back through the *local* Date getters, so every occurrence of an
+ * event was shifted by the UTC offset (an evening class west of Greenwich
+ * rendered six hours early).
+ *
+ * `toEventInput` now emits DTSTART/UNTIL/EXDATE as floating wall clock, which
+ * puts FullCalendar on its "no timezone specified" expansion path. There the
+ * rrule output is already DateMarker-shaped and DST-proof, so the stock expand
+ * is both correct and simpler.
+ */
 
 interface ExtraRenderProps {
     eventClick?: (info: EventClickArg) => void;
@@ -196,12 +191,12 @@ export function renderCalendar(
     // Fall back to slotDuration if snap isn't configured so that existing setups
     // keep their previous behavior.
     const snapDuration = toDuration(settings?.snapMinutes) ?? slotDuration;
-    const shiftCreateSnapDuration =
+    const shiftSnapDuration =
         toDuration(settings?.shiftCreateSnapMinutes) ?? snapDuration;
     const durationOptions: Record<string, string> = {};
     if (slotDuration) durationOptions.slotDuration = slotDuration;
     if (snapDuration) durationOptions.snapDuration = snapDuration;
-    let finishShiftCreateInteraction: (() => void) | null = null;
+    let finishShiftSnapInteraction: (() => void) | null = null;
 
     const modifyEventCallback =
         modifyEvent &&
@@ -318,7 +313,7 @@ export function renderCalendar(
                         info.view.type
                     );
                 } finally {
-                    finishShiftCreateInteraction?.();
+                    finishShiftSnapInteraction?.();
                     info.view.calendar.unselect();
                 }
             }),
@@ -396,51 +391,47 @@ export function renderCalendar(
         longPressDelay: 250,
     });
 
-    const cleanupShiftCreateSnap = (() => {
+    const cleanupShiftSnap = (() => {
         if (
             !snapDuration ||
-            !shiftCreateSnapDuration ||
-            snapDuration === shiftCreateSnapDuration
+            !shiftSnapDuration ||
+            snapDuration === shiftSnapDuration
         ) {
             return null;
         }
 
         const doc = containerEl.ownerDocument;
-        let isDateSelecting = false;
+        let isInteracting = false;
         let activeSnapDuration = snapDuration;
         const setSnapDuration = (duration: string) => {
             if (duration === activeSnapDuration) return;
             activeSnapDuration = duration;
             cal.setOption("snapDuration", duration);
         };
-        const targetIsEvent = (target: EventTarget | null) =>
-            target instanceof Element && !!target.closest(".fc-event");
+        // Applies to dragging and resizing an existing event as well as to
+        // selecting empty space. FullCalendar caches the slot geometry when an
+        // interaction starts, so the snap has to be in place by then — hence
+        // deciding it on mousedown, and on Shift changes up until the pointer
+        // clears the drag threshold.
         const handleMouseDown = (event: MouseEvent) => {
-            if (targetIsEvent(event.target)) {
-                isDateSelecting = false;
-                setSnapDuration(snapDuration);
-                return;
-            }
-            isDateSelecting = true;
-            setSnapDuration(
-                event.shiftKey ? shiftCreateSnapDuration : snapDuration
-            );
+            isInteracting = true;
+            setSnapDuration(event.shiftKey ? shiftSnapDuration : snapDuration);
         };
         const handleKeyChange = (event: KeyboardEvent) => {
-            if (!isDateSelecting) return;
+            if (!isInteracting) return;
             setSnapDuration(
                 event.getModifierState("Shift")
-                    ? shiftCreateSnapDuration
+                    ? shiftSnapDuration
                     : snapDuration
             );
         };
         const finishInteraction = () => {
-            if (!isDateSelecting) return;
-            isDateSelecting = false;
+            if (!isInteracting) return;
+            isInteracting = false;
             window.setTimeout(() => setSnapDuration(snapDuration), 0);
         };
 
-        finishShiftCreateInteraction = finishInteraction;
+        finishShiftSnapInteraction = finishInteraction;
         containerEl.addEventListener("mousedown", handleMouseDown, true);
         doc.addEventListener("keydown", handleKeyChange, true);
         doc.addEventListener("keyup", handleKeyChange, true);
@@ -455,7 +446,7 @@ export function renderCalendar(
     })();
     const destroyCalendar = cal.destroy.bind(cal);
     cal.destroy = () => {
-        cleanupShiftCreateSnap?.();
+        cleanupShiftSnap?.();
         destroyCalendar();
     };
 

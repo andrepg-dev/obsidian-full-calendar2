@@ -32,6 +32,14 @@ const MINUTE = 60 * SECOND;
 
 const MILLICONDS_BETWEEN_REVALIDATIONS = 5 * MINUTE;
 
+/**
+ * How long a local write suppresses an automatic revalidation. Google's list
+ * API is eventually consistent, so a re-pull that starts right after a write
+ * can still answer with the pre-write event and bounce it back in the view.
+ * Explicit (forced) revalidations are never suppressed.
+ */
+const MILLISECONDS_TO_SETTLE_AFTER_WRITE = 10 * SECOND;
+
 // TODO: Write tests for this function.
 export const eventsAreDifferent = (
     oldEvents: OFCEvent[],
@@ -92,13 +100,50 @@ export default class EventCache {
 
     private store = new EventStore();
     calendars = new Map<string, Calendar>();
-    private lastDeletedGoogleEvent:
-        | { calendarId: string; event: OFCEvent }
-        | null = null;
+    private lastDeletedGoogleEvent: {
+        calendarId: string;
+        event: OFCEvent;
+    } | null = null;
 
     private pkCounter = 0;
 
     private revalidating = false;
+
+    /**
+     * Tail of the queue that every store-mutating operation runs on.
+     *
+     * Each operation reads the store, awaits an HTTP round trip, then writes
+     * the result back. Left unserialized, two of them overlap: dragging an
+     * event twice in quick succession lets the slower request write its stale
+     * "after" state on top of the faster one, and a revalidation that starts
+     * mid-drag pushes a pre-drag snapshot of the whole calendar into the view.
+     * Both show up as an event that snaps back or renders twice.
+     */
+    private mutations: Promise<unknown> = Promise.resolve();
+
+    /** When the last local write finished. See MILLISECONDS_TO_SETTLE_AFTER_WRITE. */
+    private lastMutation = 0;
+
+    /**
+     * Run `operation` once every operation queued before it has settled.
+     *
+     * Only ever call this from a public entry point: an operation that enqueues
+     * another one waits on a queue it is itself blocking, and deadlocks.
+     */
+    private serialize<T>(operation: () => Promise<T>): Promise<T> {
+        const run = this.mutations.then(operation, operation);
+        // The queue tracks completion, not success — one failed write must not
+        // wedge every write after it.
+        this.mutations = run.then(
+            () => undefined,
+            () => undefined
+        );
+        return run;
+    }
+
+    private markMutated(): void {
+        this.lastMutation = Date.now();
+    }
 
     generateId(): string {
         return `${this.pkCounter++}`;
@@ -323,7 +368,14 @@ export default class EventCache {
      * @param event Event details
      * @returns Returns true if successful, false otherwise.
      */
-    async addEvent(calendarId: string, event: OFCEvent): Promise<boolean> {
+    addEvent(calendarId: string, event: OFCEvent): Promise<boolean> {
+        return this.serialize(() => this.addEventInner(calendarId, event));
+    }
+
+    private async addEventInner(
+        calendarId: string,
+        event: OFCEvent
+    ): Promise<boolean> {
         const calendar = this.calendars.get(calendarId);
         if (!calendar) {
             throw new Error(`Calendar ID ${calendarId} is not registered.`);
@@ -341,6 +393,7 @@ export default class EventCache {
         }
         if (calendar instanceof WritableRemoteCalendar) {
             const remoteId = await calendar.createRemoteEvent(event);
+            this.markMutated();
             const storedEvent = { ...event, id: remoteId };
             const id = this.store.add({
                 calendar,
@@ -364,7 +417,11 @@ export default class EventCache {
      * Delete an event by its ID.
      * @param eventId ID of event to be deleted.
      */
-    async deleteEvent(eventId: string): Promise<void> {
+    deleteEvent(eventId: string): Promise<void> {
+        return this.serialize(() => this.deleteEventInner(eventId));
+    }
+
+    private async deleteEventInner(eventId: string): Promise<void> {
         const details = this.store.getEventDetails(eventId);
         if (!details) {
             throw new Error(`Event ID ${eventId} not present in event store.`);
@@ -390,6 +447,7 @@ export default class EventCache {
             const deletedEvent = { ...details.event };
             this.store.delete(eventId);
             await calendar.deleteRemoteEvent(eventId);
+            this.markMutated();
             if (calendar.type === "google") {
                 this.lastDeletedGoogleEvent = {
                     calendarId: calendar.id,
@@ -406,7 +464,11 @@ export default class EventCache {
         return this.lastDeletedGoogleEvent !== null;
     }
 
-    async undoLastDeletedGoogleEvent(): Promise<CacheEntry | null> {
+    undoLastDeletedGoogleEvent(): Promise<CacheEntry | null> {
+        return this.serialize(() => this.undoLastDeletedGoogleEventInner());
+    }
+
+    private async undoLastDeletedGoogleEventInner(): Promise<CacheEntry | null> {
         const pending = this.lastDeletedGoogleEvent;
         if (!pending) {
             return null;
@@ -420,6 +482,7 @@ export default class EventCache {
         const eventToRestore = { ...pending.event };
         delete eventToRestore.id;
         const remoteId = await calendar.createRemoteEvent(eventToRestore);
+        this.markMutated();
         const restoredEvent = { ...eventToRestore, id: remoteId };
         this.store.add({
             calendar,
@@ -443,7 +506,13 @@ export default class EventCache {
      * @param newEvent new event contents
      * @returns true if update was successful, false otherwise.
      */
-    async updateEventWithId(
+    updateEventWithId(eventId: string, newEvent: OFCEvent): Promise<boolean> {
+        return this.serialize(() =>
+            this.updateEventWithIdInner(eventId, newEvent)
+        );
+    }
+
+    private async updateEventWithIdInner(
         eventId: string,
         newEvent: OFCEvent
     ): Promise<boolean> {
@@ -487,6 +556,7 @@ export default class EventCache {
         }
         if (calendar instanceof WritableRemoteCalendar) {
             await calendar.updateRemoteEvent(eventId, newEvent);
+            this.markMutated();
             this.store.delete(eventId);
             this.store.add({
                 calendar,
@@ -507,6 +577,96 @@ export default class EventCache {
             return true;
         }
         throw new Error("Read-only events cannot be modified.");
+    }
+
+    /**
+     * Whether one occurrence of this event can be changed on its own. False for
+     * events that do not repeat, and for calendars with no notion of an
+     * exception to a series.
+     */
+    supportsInstanceEdit(eventId: string): boolean {
+        const details = this.store.getEventDetails(eventId);
+        if (!details || details.event.type === "single") {
+            return false;
+        }
+        const calendar = this.calendars.get(details.calendarId);
+        return (
+            calendar instanceof WritableRemoteCalendar &&
+            calendar.supportsInstanceEdits
+        );
+    }
+
+    private instanceCalendar(eventId: string): {
+        calendar: WritableRemoteCalendar;
+    } {
+        const details = this.store.getEventDetails(eventId);
+        if (!details) {
+            throw new Error(`Event ID ${eventId} not present in event store.`);
+        }
+        const calendar = this.calendars.get(details.calendarId);
+        if (
+            !(calendar instanceof WritableRemoteCalendar) ||
+            !calendar.supportsInstanceEdits
+        ) {
+            throw new Error(
+                "This calendar cannot edit a single occurrence of a repeating event."
+            );
+        }
+        return { calendar };
+    }
+
+    /**
+     * Give one occurrence of a repeating event its own details, leaving the rest
+     * of the series alone.
+     *
+     * @param eventId ID of the repeating event.
+     * @param instanceDate ISO date of the occurrence as it currently stands.
+     * @param newEvent The occurrence's new details, as a one-off event.
+     */
+    updateRecurringInstance(
+        eventId: string,
+        instanceDate: string,
+        newEvent: OFCEvent
+    ): Promise<boolean> {
+        return this.serialize(() =>
+            this.updateRecurringInstanceInner(eventId, instanceDate, newEvent)
+        );
+    }
+
+    private async updateRecurringInstanceInner(
+        eventId: string,
+        instanceDate: string,
+        newEvent: OFCEvent
+    ): Promise<boolean> {
+        const { calendar } = this.instanceCalendar(eventId);
+        await calendar.updateRemoteInstance(eventId, instanceDate, newEvent);
+        this.markMutated();
+        // The exception is a new event of its own and the series loses a date,
+        // so re-pull rather than trying to patch the store by hand.
+        await this.refreshRemoteCalendar(calendar);
+        return true;
+    }
+
+    /**
+     * Drop one occurrence of a repeating event, leaving the rest in place.
+     */
+    deleteRecurringInstance(
+        eventId: string,
+        instanceDate: string
+    ): Promise<void> {
+        return this.serialize(() =>
+            this.deleteRecurringInstanceInner(eventId, instanceDate)
+        );
+    }
+
+    private async deleteRecurringInstanceInner(
+        eventId: string,
+        instanceDate: string
+    ): Promise<void> {
+        const { calendar } = this.instanceCalendar(eventId);
+        await calendar.deleteRemoteInstance(eventId, instanceDate);
+        this.markMutated();
+        await this.refreshRemoteCalendar(calendar);
     }
 
     /**
@@ -674,6 +834,30 @@ export default class EventCache {
     }
 
     /**
+     * Re-pull one remote calendar and swap its events into the store.
+     */
+    private async refreshRemoteCalendar(calendar: RemoteCalendar) {
+        await calendar.revalidate();
+        const events = await calendar.getEvents();
+        this.store.deleteEventsInCalendar(calendar);
+        const newEvents = events.map(([event, location]) => ({
+            event,
+            id: event.id || this.generateId(),
+            location,
+            calendarId: calendar.id,
+        }));
+        newEvents.forEach(({ event, id, location }) => {
+            this.store.add({ calendar, location, id, event });
+        });
+        this.updateCalendar({
+            id: calendar.id,
+            editable: calendar instanceof WritableRemoteCalendar,
+            color: calendar.color,
+            events: newEvents,
+        });
+    }
+
+    /**
      * Revalidate calendars asynchronously. This is not a blocking function: as soon as new data
      * is available for any remote calendar, its data will be updated in the cache and any subscribing views.
      */
@@ -692,43 +876,31 @@ export default class EventCache {
             return;
         }
 
+        if (
+            !force &&
+            now - this.lastMutation < MILLISECONDS_TO_SETTLE_AFTER_WRITE
+        ) {
+            console.debug("A local write is still settling; not revalidating.");
+            return;
+        }
+
         const remoteCalendars = [...this.calendars.values()].flatMap((c) =>
             c instanceof RemoteCalendar ? c : []
         );
 
         console.warn("Revalidating remote calendars...");
         this.revalidating = true;
-        const promises = remoteCalendars.map((calendar) => {
-            return calendar
-                .revalidate()
-                .then(() => calendar.getEvents())
-                .then((events) => {
-                    const deletedEvents = [
-                        ...this.store.deleteEventsInCalendar(calendar),
-                    ];
-                    const newEvents = events.map(([event, location]) => ({
-                        event,
-                        id: event.id || this.generateId(),
-                        location,
-                        calendarId: calendar.id,
-                    }));
-                    newEvents.forEach(({ event, id, location }) => {
-                        this.store.add({
-                            calendar,
-                            location,
-                            id,
-                            event,
-                        });
-                    });
-                    this.updateCalendar({
-                        id: calendar.id,
-                        editable: calendar instanceof WritableRemoteCalendar,
-                        color: calendar.color,
-                        events: newEvents,
-                    });
-                });
-        });
-        Promise.allSettled(promises).then((results) => {
+        // Queued as a single unit so the re-pull cannot interleave with a
+        // create/update/delete, while the calendars still refresh in parallel
+        // with each other.
+        const settled = this.serialize(() =>
+            Promise.allSettled(
+                remoteCalendars.map((calendar) =>
+                    this.refreshRemoteCalendar(calendar)
+                )
+            )
+        );
+        settled.then((results) => {
             this.revalidating = false;
             this.lastRevalidation = Date.now();
             console.debug("All remote calendars have been fetched.");

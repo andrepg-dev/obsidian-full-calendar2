@@ -312,9 +312,9 @@ export class FullCalendarSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName("Shift-create snap interval")
+            .setName("Shift snap interval")
             .setDesc(
-                "Minimum increment when creating events while holding Shift. Drag and resize still use the normal snap interval."
+                "Minimum increment while holding Shift, when creating an event as well as when dragging or resizing one. Without Shift, the normal snap interval applies."
             )
             .addDropdown((dropdown) => {
                 const options: Record<string, string> = {

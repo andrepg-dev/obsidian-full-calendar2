@@ -49,12 +49,25 @@ export function launchCreateModal(
     ).open();
 }
 
-export function launchEditModal(plugin: FullCalendarPlugin, eventId: string) {
+/**
+ * @param instanceDate ISO date of the occurrence that was clicked. Only
+ *        meaningful for repeating events, where it lets the modal offer to edit
+ *        that one occurrence instead of the whole series.
+ */
+export function launchEditModal(
+    plugin: FullCalendarPlugin,
+    eventId: string,
+    instanceDate?: string
+) {
     const eventToEdit = plugin.cache.getEventById(eventId);
     if (!eventToEdit) {
         throw new Error("Cannot edit event that doesn't exist.");
     }
     const calId = plugin.cache.getInfoForEditableEvent(eventId).calendar.id;
+    const instance =
+        instanceDate && plugin.cache.supportsInstanceEdit(eventId)
+            ? { date: instanceDate }
+            : undefined;
 
     const calendars = [...plugin.cache.calendars.entries()]
         .filter(
@@ -76,12 +89,22 @@ export function launchEditModal(plugin: FullCalendarPlugin, eventId: string) {
         React.createElement(EditEvent, {
             app: plugin.app,
             initialEvent: eventToEdit,
+            instance,
             calendars,
             defaultCalendarIndex: calIdx,
             cancel: closeModal,
             registerCloseRequest,
-            submit: async (data, calendarIndex) => {
+            submit: async (data, calendarIndex, scope) => {
                 try {
+                    if (instance && scope === "single") {
+                        await plugin.cache.updateRecurringInstance(
+                            eventId,
+                            instance.date,
+                            data
+                        );
+                        closeModal();
+                        return;
+                    }
                     if (calendarIndex !== calIdx) {
                         await plugin.cache.moveEventToCalendar(
                             eventId,
@@ -100,9 +123,16 @@ export function launchEditModal(plugin: FullCalendarPlugin, eventId: string) {
             open: async () => {
                 openFileForEvent(plugin.cache, plugin.app, eventId);
             },
-            deleteEvent: async () => {
+            deleteEvent: async (scope) => {
                 try {
-                    await plugin.cache.deleteEvent(eventId);
+                    if (instance && scope === "single") {
+                        await plugin.cache.deleteRecurringInstance(
+                            eventId,
+                            instance.date
+                        );
+                    } else {
+                        await plugin.cache.deleteEvent(eventId);
+                    }
                     closeModal();
                 } catch (e) {
                     if (e instanceof Error) {

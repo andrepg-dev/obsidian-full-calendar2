@@ -1,10 +1,11 @@
 import "./overrides.css";
 import "./tailwind.gen.css";
 import { ItemView, Menu, Notice, WorkspaceLeaf } from "obsidian";
-import { Calendar, EventSourceInput } from "@fullcalendar/core";
+import { Calendar, EventApi, EventSourceInput } from "@fullcalendar/core";
+import { DateTime } from "luxon";
 import { renderCalendar, openColorPalette } from "./calendar";
 import FullCalendarPlugin from "../main";
-import { FCError, PLUGIN_SLUG } from "../types";
+import { FCError, OFCEvent, PLUGIN_SLUG } from "../types";
 import {
     dateEndpointsToFrontmatter,
     fromEventApi,
@@ -89,6 +90,50 @@ export class CalendarView extends ItemView {
         return this.inSidebar ? "Full Calendar" : "Calendar";
     }
 
+    /**
+     * Drop every copy of an event from the rendered calendar.
+     *
+     * `getEventById` only ever answers with the first match, which is not
+     * enough to clean up after a duplicate id: the extra copies would survive
+     * the removal and stay on screen.
+     *
+     * @returns how many copies were removed.
+     */
+    private removeRenderedEvents(id: string): number {
+        const matches =
+            this.fullCalendarView?.getEvents().filter((e) => e.id === id) ?? [];
+        matches.forEach((event) => {
+            console.debug("removing event", event.toPlainObject());
+            event.remove();
+        });
+        return matches.length;
+    }
+
+    /**
+     * Write a drag or resize back to the cache.
+     *
+     * Dropping one occurrence of a repeating event moves only that occurrence —
+     * the same default the edit modal takes — as long as the calendar can carve
+     * an exception out of the series.
+     *
+     * @param originalStart Where the occurrence sat before the drag; this is
+     *        what identifies it within the series.
+     */
+    private async persistEventChange(
+        event: EventApi,
+        originalStart: Date | null | undefined
+    ): Promise<boolean> {
+        const cache = this.plugin.cache;
+        if (originalStart && cache.supportsInstanceEdit(event.id)) {
+            return cache.updateRecurringInstance(
+                event.id,
+                DateTime.fromJSDate(originalStart).toISODate(),
+                fromEventApi(event, true)
+            );
+        }
+        return cache.updateEventWithId(event.id, fromEventApi(event));
+    }
+
     translateSources() {
         return this.plugin.cache.getAllEvents().map(
             ({ events, editable, color, id }): EventSourceInput => ({
@@ -166,7 +211,15 @@ export class CalendarView extends ItemView {
                         );
                     } else {
                         clearSelection();
-                        launchEditModal(this.plugin, info.event.id);
+                        launchEditModal(
+                            this.plugin,
+                            info.event.id,
+                            info.event.start
+                                ? DateTime.fromJSDate(
+                                      info.event.start
+                                  ).toISODate()
+                                : undefined
+                        );
                     }
                 } catch (e) {
                     if (e instanceof Error) {
@@ -208,9 +261,9 @@ export class CalendarView extends ItemView {
             },
             modifyEvent: async (newEvent, oldEvent) => {
                 try {
-                    const didModify = await this.plugin.cache.updateEventWithId(
-                        oldEvent.id,
-                        fromEventApi(newEvent)
+                    const didModify = await this.persistEventChange(
+                        newEvent,
+                        oldEvent.start
                     );
                     if (!didModify) return false;
 
@@ -228,8 +281,16 @@ export class CalendarView extends ItemView {
                             (id) => id !== oldEvent.id
                         );
                         for (const id of otherIds) {
+                            // Re-read the handle on every pass: persisting the
+                            // previous move can swap the whole event source out
+                            // from under us, which detaches any handle that was
+                            // grabbed before it.
                             const ev = this.fullCalendarView?.getEventById(id);
                             if (!ev || !ev.start) continue;
+                            const originalStart = new Date(ev.start.getTime());
+                            const originalEnd = ev.end
+                                ? new Date(ev.end.getTime())
+                                : null;
                             const newStart = new Date(
                                 ev.start.getTime() + startDelta
                             );
@@ -240,12 +301,19 @@ export class CalendarView extends ItemView {
                                 allDay: ev.allDay,
                             });
                             try {
-                                await this.plugin.cache.updateEventWithId(
-                                    id,
-                                    fromEventApi(ev)
+                                await this.persistEventChange(
+                                    ev,
+                                    originalStart
                                 );
                             } catch (e: any) {
                                 console.error(e);
+                                // Put it back where it was, or the view keeps
+                                // showing a move the server never took.
+                                this.fullCalendarView
+                                    ?.getEventById(id)
+                                    ?.setDates(originalStart, originalEnd, {
+                                        allDay: ev.allDay,
+                                    });
                                 new Notice(
                                     `No se pudo mover ${ev.title}: ${e.message}`
                                 );
@@ -292,6 +360,31 @@ export class CalendarView extends ItemView {
                 if (!event) {
                     return;
                 }
+
+                // The right-clicked chip is one occurrence, not the series.
+                // When the calendar can carve out an exception, edits from this
+                // menu land on that occurrence alone — the same default the
+                // edit modal and drag-and-drop already take.
+                const occurrenceDate = e.start
+                    ? DateTime.fromJSDate(e.start).toISODate()
+                    : null;
+                const applyToOccurrence = async (
+                    process: (ev: OFCEvent) => OFCEvent
+                ): Promise<void> => {
+                    const cache = this.plugin.cache;
+                    if (!cache) {
+                        return;
+                    }
+                    if (occurrenceDate && cache.supportsInstanceEdit(e.id)) {
+                        await cache.updateRecurringInstance(
+                            e.id,
+                            occurrenceDate,
+                            process(fromEventApi(e, true))
+                        );
+                        return;
+                    }
+                    await cache.processEvent(e.id, process);
+                };
 
                 if (
                     this.selectedEventIds.has(e.id) &&
@@ -392,13 +485,11 @@ export class CalendarView extends ItemView {
                                     .onClick(async () => {
                                         if (!this.plugin.cache) return;
                                         try {
-                                            await this.plugin.cache.processEvent(
-                                                e.id,
-                                                (ev) =>
-                                                    markGoogleTitleTaskState(
-                                                        ev,
-                                                        "completed"
-                                                    )
+                                            await applyToOccurrence((ev) =>
+                                                markGoogleTitleTaskState(
+                                                    ev,
+                                                    "completed"
+                                                )
                                             );
                                         } catch (err: any) {
                                             console.error(err);
@@ -417,13 +508,11 @@ export class CalendarView extends ItemView {
                                     .onClick(async () => {
                                         if (!this.plugin.cache) return;
                                         try {
-                                            await this.plugin.cache.processEvent(
-                                                e.id,
-                                                (ev) =>
-                                                    markGoogleTitleTaskState(
-                                                        ev,
-                                                        "inprogress"
-                                                    )
+                                            await applyToOccurrence((ev) =>
+                                                markGoogleTitleTaskState(
+                                                    ev,
+                                                    "inprogress"
+                                                )
                                             );
                                         } catch (err: any) {
                                             console.error(err);
@@ -442,13 +531,11 @@ export class CalendarView extends ItemView {
                                     .onClick(async () => {
                                         if (!this.plugin.cache) return;
                                         try {
-                                            await this.plugin.cache.processEvent(
-                                                e.id,
-                                                (ev) =>
-                                                    markGoogleTitleTaskState(
-                                                        ev,
-                                                        "uncompleted"
-                                                    )
+                                            await applyToOccurrence((ev) =>
+                                                markGoogleTitleTaskState(
+                                                    ev,
+                                                    "uncompleted"
+                                                )
                                             );
                                         } catch (err: any) {
                                             console.error(err);
@@ -467,8 +554,7 @@ export class CalendarView extends ItemView {
                                     .onClick(async () => {
                                         if (!this.plugin.cache) return;
                                         try {
-                                            await this.plugin.cache.processEvent(
-                                                e.id,
+                                            await applyToOccurrence(
                                                 clearGoogleTitleTaskState
                                             );
                                         } catch (err: any) {
@@ -608,11 +694,8 @@ export class CalendarView extends ItemView {
                     toAdd,
                 });
                 toRemove.forEach((id) => {
-                    const event = this.fullCalendarView?.getEventById(id);
-                    if (event) {
-                        console.debug("removing event", event.toPlainObject());
-                        event.remove();
-                    } else {
+                    const removed = this.removeRenderedEvents(id);
+                    if (removed === 0) {
                         console.warn(
                             `Event with id=${id} was slated to be removed but does not exist in the calendar.`
                         );
@@ -626,6 +709,10 @@ export class CalendarView extends ItemView {
                         eventInput,
                         calendarId,
                     });
+                    // FullCalendar does not enforce unique ids, so a copy left
+                    // behind by an event source that was swapped in while this
+                    // update was in flight would render alongside the new one.
+                    this.removeRenderedEvents(id);
                     const addedEvent = this.fullCalendarView?.addEvent(
                         eventInput!,
                         calendarId

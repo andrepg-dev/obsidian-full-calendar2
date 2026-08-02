@@ -31,4 +31,42 @@ export default abstract class WritableRemoteCalendar extends RemoteCalendar {
      * Delete a remote event identified by its remote id.
      */
     abstract deleteRemoteEvent(remoteId: string): Promise<void>;
+
+    /**
+     * Whether a single occurrence of a recurring series can be edited on its own,
+     * leaving the rest of the series untouched.
+     */
+    get supportsInstanceEdits(): boolean {
+        return false;
+    }
+
+    /**
+     * Detach one occurrence of a recurring series and give it its own details.
+     *
+     * @param remoteId Remote id of the series (the master event).
+     * @param instanceDate ISO date (`yyyy-MM-dd`) of the occurrence being edited,
+     *        as it stands *before* the edit.
+     * @param event The occurrence's new details, as a one-off event.
+     */
+    async updateRemoteInstance(
+        remoteId: string,
+        instanceDate: string,
+        event: OFCEvent
+    ): Promise<void> {
+        throw new Error(
+            "This calendar cannot edit a single occurrence of a repeating event."
+        );
+    }
+
+    /**
+     * Remove one occurrence of a recurring series, leaving the rest in place.
+     */
+    async deleteRemoteInstance(
+        remoteId: string,
+        instanceDate: string
+    ): Promise<void> {
+        throw new Error(
+            "This calendar cannot delete a single occurrence of a repeating event."
+        );
+    }
 }
